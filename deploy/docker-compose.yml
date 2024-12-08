@@ -1,7 +1,7 @@
 # docker-compose.yml
 version: '3.8'
 services:
-  spring-app:
+  minecraft-agent:
     image: ${DOCKER_IMAGE}
     container_name: ${APP_NAME}
     restart: unless-stopped
@@ -9,6 +9,8 @@ services:
       - web
     environment:
       - SPRING_PROFILES_ACTIVE=${SPRING_PROFILE}
+      - SERVER_PROPERTIES_PATH=${SERVER_PROPERTIES_PATH}
+      - MINECRAFT_MSCS_PATH=${MINECRAFT_MSCS_PATH}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/actuator/health"]
       interval: 30s
