@@ -8,16 +8,14 @@ pipeline {
 
     environment {
         // Get Docker credentials from Jenkins credentials store
-        DOCKER_CREDENTIALS = credentials('docker-hub-credentials')
-        DOCKER_REGISTRY = credentials('docker-registry-url') // e.g., 'docker.io/username' or private registry
+        DOCKER_CREDENTIALS = 'docker-hub-credentials'
+        DOCKER_CREDENTIALS_NEW = credentials('docker-hub-credentials')
 
-        // Get server details from Jenkins credentials
-        DEPLOY_SERVER = credentials("${params.DEPLOY_ENV}-ssh-key")
 
         // Construct Docker image name and tag
         GIT_COMMIT_SHORT = powershell(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
         VERSION = powershell(script: 'if (Test-Path VERSION) { Get-Content VERSION } else { "1.0.0" }', returnStdout: true).trim()
-        DOCKER_IMAGE = "${DOCKER_REGISTRY}/${params.APP_NAME}"
+        DOCKER_IMAGE = "${params.APP_NAME}"
         DOCKER_TAG = "${params.DEPLOY_ENV}-${VERSION}-${GIT_COMMIT_SHORT}"
         DOCKER_LATEST = "${DOCKER_IMAGE}:${params.DEPLOY_ENV}-latest"
         DOCKER_VERSIONED = "${DOCKER_IMAGE}:${DOCKER_TAG}"
@@ -32,7 +30,7 @@ pipeline {
 
         stage('Build Spring Boot App') {
             steps {
-                powershell 'mvn clean package -DskipTests'
+                bat 'mvnw.cmd clean package -DskipTests'
             }
         }
 
@@ -40,13 +38,15 @@ pipeline {
             steps {
                 script {
                     def workspace = env.WORKSPACE.replace('\\', '/')
-                    powershell """
-                        docker build -t ${DOCKER_VERSIONED} `
+                    withCredentials([usernamePassword(credentialsId: DOCKER_CREDENTIALS, usernameVariable: 'DOCKER_CREDENTIALS_USR', passwordVariable: 'DOCKER_CREDENTIALS_PSW')]) {
+                        powershell """
+                        docker build -t ${DOCKER_CREDENTIALS_USR}/${DOCKER_VERSIONED} `
                             --build-arg APP_VERSION=${VERSION} `
                             --build-arg BUILD_ENV=${params.DEPLOY_ENV} `
                             .
-                        docker tag ${DOCKER_VERSIONED} ${DOCKER_LATEST}
-                    """
+                        docker tag ${DOCKER_CREDENTIALS_USR}/${DOCKER_VERSIONED} ${DOCKER_CREDENTIALS_USR}/${DOCKER_LATEST}
+                        """
+                    }
                 }
             }
         }
@@ -54,11 +54,13 @@ pipeline {
         stage('Push Docker Image') {
             steps {
                 script {
-                    powershell """
-                        echo ${DOCKER_CREDENTIALS_PSW} | docker login ${DOCKER_REGISTRY} -u ${DOCKER_CREDENTIALS_USR} --password-stdin
-                        docker push ${DOCKER_VERSIONED}
-                        docker push ${DOCKER_LATEST}
-                    """
+                    withCredentials([usernamePassword(credentialsId: DOCKER_CREDENTIALS, usernameVariable: 'DOCKER_CREDENTIALS_USR', passwordVariable: 'DOCKER_CREDENTIALS_PSW')]) {
+                        powershell """
+                            docker login -u ${DOCKER_CREDENTIALS_USR} -p ${DOCKER_CREDENTIALS_PSW}
+                            docker push ${DOCKER_CREDENTIALS_USR}/${DOCKER_VERSIONED}
+                            docker push ${DOCKER_CREDENTIALS_USR}/${DOCKER_LATEST}
+                        """
+                    }
                 }
             }
         }
@@ -66,7 +68,7 @@ pipeline {
         stage('Deploy to Server') {
             steps {
                 script {
-                    def deployConfig = load "deploy/${params.DEPLOY_ENV}/config.groovy"
+                    def deployConfig = load "deploy/dev/config.groovy"
 
                     // Create temporary deployment files
                     def tempDir = pwd(tmp: true)
@@ -74,40 +76,49 @@ pipeline {
                     def composeFile = "${tempDir}/docker-compose.yml"
                     powershell """
                         Set-Content -Path "${envFile}" -Value @"
-                        DOCKER_IMAGE=${DOCKER_VERSIONED}
-                        APP_NAME=${params.APP_NAME}
-                        SPRING_PROFILE=${params.DEPLOY_ENV}
-                        "@
+DOCKER_IMAGE=${DOCKER_CREDENTIALS_NEW_USR}/${DOCKER_VERSIONED}
+APP_NAME=${params.APP_NAME}
+SPRING_PROFILE=${params.DEPLOY_ENV}
+SERVER_PROPERTIES_PATH=/opt/mscs/worlds/world1/server.properties
+MINECRAFT_MSCS_PATH=/usr/local/bin/mscs
+"@
                         Copy-Item "deploy/docker-compose.yml" -Destination "${composeFile}"
                     """
                     // Create a temporary directory for deployment files
-                    sshagent([DEPLOY_SERVER]) {
+                    withCredentials([sshUserPrivateKey(credentialsId: 'hetzner-ssh-key',
+                                                                         keyFileVariable: 'SSH_KEY',
+                                                                         usernameVariable: 'SSH_USER')]) {
                         powershell """
+                            # Get current user
+                            \$currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+
+                            # Fix permissions
+                            icacls "${SSH_KEY}" /inheritance:r
+                            icacls "${SSH_KEY}" /grant:r "\${currentUser}:(F)"
+
                             # Create temp directory for deployment files
-                            ssh -o StrictHostKeyChecking=no ${DEPLOY_SERVER_USR}@${DEPLOY_SERVER_PSW} 'mkdir -p /tmp/deploy-${BUILD_NUMBER}'
+                            ssh -i ${SSH_KEY} -o StrictHostKeyChecking=no ${SSH_USER}@${deployConfig.DOMAIN_NAME} 'mkdir -p /tmp/deploy-${BUILD_NUMBER}'
 
                             # Copy files using scp (Windows compatible)
-                            scp -o StrictHostKeyChecking=no "${envFile}" ${DEPLOY_SERVER_USR}@${DEPLOY_SERVER_PSW}:/tmp/deploy-${BUILD_NUMBER}/.env
-                            scp -o StrictHostKeyChecking=no "${composeFile}" ${DEPLOY_SERVER_USR}@${DEPLOY_SERVER_PSW}:/tmp/deploy-${BUILD_NUMBER}/docker-compose.yml
-                            scp -r -o StrictHostKeyChecking=no "deploy/nginx" ${DEPLOY_SERVER_USR}@${DEPLOY_SERVER_PSW}:/tmp/deploy-${BUILD_NUMBER}/
+                            scp -i ${SSH_KEY} -o StrictHostKeyChecking=no "${envFile}" ${SSH_USER}@${deployConfig.DOMAIN_NAME}:/tmp/deploy-${BUILD_NUMBER}/.env
+                            scp -i ${SSH_KEY} -o StrictHostKeyChecking=no "${composeFile}" ${SSH_USER}@${deployConfig.DOMAIN_NAME}:/tmp/deploy-${BUILD_NUMBER}/docker-compose.yml
+                            scp -i ${SSH_KEY} -r -o StrictHostKeyChecking=no "deploy/nginx" ${SSH_USER}@${deployConfig.DOMAIN_NAME}:/tmp/deploy-${BUILD_NUMBER}/
 
-                            ssh -o StrictHostKeyChecking=no ${DEPLOY_SERVER_USR}@${DEPLOY_SERVER_PSW} '
-                                sudo mkdir -p /opt/minecraft-agent
-                                sudo cp /tmp/deploy-${BUILD_NUMBER}/.env /opt/minecraft-agent/
-
-                                sudo cp /tmp/deploy-${BUILD_NUMBER}/docker-compose.yml /opt/minecraft-agent/docker-compose.yml
-
-                                sudo cp /tmp/deploy-${BUILD_NUMBER}/nginx/minecraft-agent.conf /etc/nginx/conf.d/
-
-                                docker network create web || true
-
-                                sudo systemctl daemon-reload
-                                sudo systemctl enable minecraft-server
-                                sudo systemctl restart minecraft-server
-                                sudo systemctl restart nginx
-
-                                timeout 60 bash -c "until curl -s http://localhost:8080/actuator/health | grep UP; do sleep 5; done"
-                            '
+                            ssh -i ${SSH_KEY} -o StrictHostKeyChecking=no ${SSH_USER}@${deployConfig.DOMAIN_NAME} @'
+sudo mkdir -p /opt/minecraft-agent
+sudo cp /tmp/deploy-${BUILD_NUMBER}/.env /opt/minecraft-agent/
+sudo cp /tmp/deploy-${BUILD_NUMBER}/docker-compose.yml /opt/minecraft-agent/docker-compose.yml
+sudo cp /tmp/deploy-${BUILD_NUMBER}/nginx/minecraft-agent.conf /etc/nginx/conf.d/
+docker network create web || true
+cd /opt/minecraft-agent
+docker-compose pull
+sudo systemctl daemon-reload
+sudo systemctl enable minecraft-server
+sudo systemctl restart minecraft-server
+sudo systemctl restart nginx
+rm -rf /tmp/deploy-${BUILD_NUMBER}
+timeout 60 bash -c \\\"while ! curl -s http://localhost:8080/actuator/health | grep UP; do sleep 5; done\\\"
+'@
                         """
                     }
                 }
