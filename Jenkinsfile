@@ -26,18 +26,6 @@ pipeline {
 
                     // Create temporary deployment files
                     def tempDir = pwd(tmp: true)
-                    def envFile = "${tempDir}/env.txt"
-                    def composeFile = "${tempDir}/docker-compose.yml"
-                    powershell """
-                        Set-Content -Path "${envFile}" -Value @"
-DOCKER_IMAGE=${DOCKER_CREDENTIALS_NEW_USR}/${DOCKER_VERSIONED}
-APP_NAME=${params.APP_NAME}
-SPRING_PROFILE=${params.DEPLOY_ENV}
-SERVER_PROPERTIES_PATH=/opt/mscs/worlds/world1/server.properties
-MINECRAFT_MSCS_PATH=/usr/local/bin/mscs
-"@
-                        Copy-Item "deploy/docker-compose.yml" -Destination "${composeFile}"
-                    """
                     // Create a temporary directory for deployment files
                     withCredentials([sshUserPrivateKey(credentialsId: 'hetzner-ssh-key',
                                                                          keyFileVariable: 'SSH_KEY',
@@ -81,7 +69,6 @@ timeout 60 bash -c \\\"while ! curl -s http://localhost:8080/actuator/health | g
         post {
             always {
                 cleanWs()
-                powershell 'docker logout ${DOCKER_REGISTRY}'
             }
         }
 }
