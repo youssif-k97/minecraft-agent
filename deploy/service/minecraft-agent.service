@@ -1,0 +1,20 @@
+[Unit]
+Description= minecraft-agent Spring Boot Application
+After=network.target
+
+[Service]
+Type=simple
+Environment="SPRING_PROFILES_ACTIVE=dev"
+Environment="JAVA_OPTS=-Xmx512m -Xms256m"
+Environment=APP_NAME=minecraft-agent
+Environment=SERVER_PROPERTIES_PATH=/opt/mscs/worlds/world1/server.properties
+Environment=MINECRAFT_MSCS_PATH=/usr/local/bin/mscs
+WorkingDirectory=/opt/minecraft-agent
+ExecStart=/usr/bin/java ${JAVA_OPTS} -jar minecraft-agent-0.0.1-SNAPSHOT.jar
+SuccessExitStatus=143
+TimeoutStopSec=10
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
