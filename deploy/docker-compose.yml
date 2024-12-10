@@ -11,7 +11,7 @@ services:
       - web
     volumes:
       - /opt/mscs:/opt/mscs
-      - /usr/local/bin/mscs
+      - /usr/local/bin/mscs:/usr/local/bin/mscs
     environment:
       - SPRING_PROFILES_ACTIVE=${SPRING_PROFILE}
       - SERVER_PROPERTIES_PATH=${SERVER_PROPERTIES_PATH}
