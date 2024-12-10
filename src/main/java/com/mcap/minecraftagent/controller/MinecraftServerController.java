@@ -1,5 +1,9 @@
 package com.mcap.minecraftagent.controller;
 
+import com.mcap.minecraftagent.dto.MinecraftWorld;
+import com.mcap.minecraftagent.dto.MinecraftWorldsResponse;
+import com.mcap.minecraftagent.dto.PlayersResponse;
+import com.mcap.minecraftagent.service.MinecraftInfoService;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.http.ResponseEntity;
 import com.mcap.minecraftagent.service.MinecraftServerService;
@@ -10,13 +14,27 @@ import com.mcap.minecraftagent.service.MinecraftServerService.CommandResult;
 public class MinecraftServerController {
 
     private final MinecraftServerService minecraftService;
+    private final MinecraftInfoService infoService;
 
-    public MinecraftServerController(MinecraftServerService minecraftService) {
+    public MinecraftServerController(MinecraftServerService minecraftService, MinecraftInfoService infoService) {
+        this.infoService = infoService;
         this.minecraftService = minecraftService;
     }
+    @GetMapping("/worlds")
+    public ResponseEntity<MinecraftWorldsResponse> getAllWorlds() {
+        return ResponseEntity.ok(new MinecraftWorldsResponse(infoService.getAllWorlds()));
+    }
 
+    @GetMapping("/worlds/{worldId}")
+    public ResponseEntity<MinecraftWorld> getWorld(@PathVariable String worldId) {
+        return infoService.getAllWorlds().stream()
+                .filter(world -> world.id().equals(worldId))
+                .findFirst()
+                .map(ResponseEntity::ok)
+                .orElse(ResponseEntity.notFound().build());
+    }
     @GetMapping("/servers")
-    public ResponseEntity<CommandResult> getServers() {
+    public ResponseEntity getServers() {
         return ResponseEntity.ok(minecraftService.getServers());
     }
 
