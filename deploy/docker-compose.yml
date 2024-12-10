@@ -4,7 +4,6 @@ services:
   minecraft-agent:
     image: ${DOCKER_IMAGE}
     container_name: ${APP_NAME}
-    user: minecraft
     ports:
       - "8080:8080"
     restart: unless-stopped
@@ -12,7 +11,7 @@ services:
       - web
     volumes:
       - /opt/mscs:/opt/mscs
-      - /usr/local/bin/mscs:/usr/local/bin/mscs
+      - /usr/local/bin/mscs
     environment:
       - SPRING_PROFILES_ACTIVE=${SPRING_PROFILE}
       - SERVER_PROPERTIES_PATH=${SERVER_PROPERTIES_PATH}
