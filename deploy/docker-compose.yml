@@ -4,6 +4,8 @@ services:
   minecraft-agent:
     image: ${DOCKER_IMAGE}
     container_name: ${APP_NAME}
+    ports:
+      - "8080:8080"
     restart: unless-stopped
     networks:
       - web
