@@ -18,7 +18,7 @@ public class MinecraftServerService {
     private String mscsPath;
     private static final List<String> ALLOWED_COMMANDS = List.of(
             "start", "stop", "restart", "status", "list", "backup",
-            "connected", "running", "worlds", "version"
+            "running", "worlds", "version"
     );
 
     public record CommandResult(
@@ -84,50 +84,25 @@ public class MinecraftServerService {
     }
 
     /**
-     * Get the status of all Minecraft servers
-     * @return Status information for all servers
-     */
-    public CommandResult getServers() {
-        return executeCommand(" ", "list");
-    }
-
-    /**
-     * Get the status of all Minecraft servers
-     * @return Status information for all servers
-     */
-    public CommandResult getAllServersStatus() {
-        return executeCommand(" ", "status");
-    }
-
-    /**
      * Start a specific Minecraft server
-     * @param serverName The name of the server to start
+     * @param worldId The name of the server to start
      */
-    public CommandResult startServer(String serverName) {
-        return executeCommand(serverName, "start");
+    public CommandResult startServer(String worldId) {
+        return executeCommand(worldId, "start");
     }
 
     /**
      * Stop a specific Minecraft server
-     * @param serverName The name of the server to stop
+     * @param worldId The name of the server to stop
      */
-    public CommandResult stopServer(String serverName) {
-        return executeCommand(serverName, "stop");
+    public CommandResult stopServer(String worldId) {
+        return executeCommand(worldId, "stop");
     }
-
-    /**
-     * Get list of connected players
-     * @param serverName The name of the server
-     */
-    public CommandResult getConnectedPlayers(String serverName) {
-        return executeCommand(serverName, "connected");
-    }
-
     /**
      * Create a backup of the server
-     * @param serverName The name of the server to backup
+     * @param worldId The name of the server to backup
      */
-    public CommandResult createBackup(String serverName) {
-        return executeCommand(serverName, "backup");
+    public CommandResult createBackup(String worldId) {
+        return executeCommand(worldId, "backup");
     }
 }

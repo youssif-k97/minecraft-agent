@@ -68,22 +68,28 @@ public class MinecraftInfoService {
                             worldId,
                             false,
                             Collections.emptyList(),
+                            getWhitelistedPlayers(worldId),
+                            getBlacklistedPlayers(worldId),
+                            getWorldProperties(worldId),
                             new HashMap<>()
                     );
                 } else {
                     // Parse running world info
                     Matcher versionMatcher = VERSION_PATTERN.matcher(status);
                     if (versionMatcher.find()) {
-                        Map<String, String> properties = getWorldProperties(worldId);
-                        properties.put("version", versionMatcher.group(1));
-                        properties.put("maxPlayers", versionMatcher.group(3));
+                        Map<String, String> customProperties = new HashMap<>();
+                        customProperties.put("version", versionMatcher.group(1));
+                        customProperties.put("maxPlayers", versionMatcher.group(3));
 
                         currentWorld = new MinecraftWorld(
                                 worldId,
                                 worldId,
                                 true,
-                                new ArrayList<>(),
-                                properties
+                                Collections.emptyList(),
+                                getWhitelistedPlayers(worldId),
+                                getBlacklistedPlayers(worldId),
+                                getWorldProperties(worldId),
+                                customProperties
                         );
                     }
                 }
@@ -103,19 +109,22 @@ public class MinecraftInfoService {
                             currentWorld.name(),
                             currentWorld.isActive(),
                             players,
-                            currentWorld.properties()
+                            getWhitelistedPlayers(currentWorld.id()),
+                            getBlacklistedPlayers(currentWorld.id()),
+                            currentWorld.properties(),
+                            currentWorld.customProperties()
                     );
                 }
                 else if (trimmedLine.startsWith("Port:")) {
-                    currentWorld.properties().put("port",
+                    currentWorld.customProperties().put("port",
                             trimmedLine.split(":")[1].trim().replace(".", ""));
                 }
                 else if (trimmedLine.startsWith("Memory used:")) {
-                    currentWorld.properties().put("memoryUsed",
+                    currentWorld.customProperties().put("memoryUsed",
                             trimmedLine.split(":")[1].trim().replace(".", ""));
                 }
                 else if (trimmedLine.startsWith("Process ID:")) {
-                    currentWorld.properties().put("pid",
+                    currentWorld.customProperties().put("pid",
                             trimmedLine.split(":")[1].trim().replace(".", ""));
                 }
             }
