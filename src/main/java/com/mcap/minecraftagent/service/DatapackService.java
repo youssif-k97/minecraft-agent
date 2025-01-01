@@ -19,8 +19,10 @@ public class DatapackService {
 
     private static final int BUFFER_SIZE = 8192;
 
+    private final String baseDir = System.getProperty("user.home") + System.getProperty("file.separator") + "minecraft-servers" + System.getProperty("file.separator");
+
     public Path downloadDatapack(String worldId, String datapackName, String datapackUrl) throws IOException {
-        String worldDatapacksDir = "/opt/mscs/worlds/" + worldId + "/" + worldId +  "/datapacks";
+        String worldDatapacksDir = baseDir + worldId + System.getProperty("file.separator") + "datapacks";
         URL url = new URL(datapackUrl);
         Path targetPath = Paths.get(worldDatapacksDir, datapackName);
 
@@ -40,7 +42,7 @@ public class DatapackService {
         return targetPath;
     }
     public void removeDatapack(String worldId, String datapackName) {
-        String worldDatapacksDir = "/opt/mscs/worlds/" + worldId + "/" + worldId +  "/datapacks";
+        String worldDatapacksDir = baseDir + worldId + System.getProperty("file.separator") + "datapacks";
         // Loop through the datapack files in the directory and add them to the list
         File datapacksDir = new File(worldDatapacksDir);
         if (datapacksDir.exists() && datapacksDir.isDirectory()) {
@@ -57,7 +59,7 @@ public class DatapackService {
         }
     }
     public List<Datapack> getDatapacks(String worldId) {
-        String worldDatapacksDir = "/opt/mscs/worlds/" + worldId + "/" + worldId +  "/datapacks";
+        String worldDatapacksDir = baseDir + worldId + System.getProperty("file.separator") + "datapacks";
         List<Datapack> datapacks = new ArrayList<>();
         // Loop through the datapack files in the directory and add them to the list
         File datapacksDir = new File(worldDatapacksDir);

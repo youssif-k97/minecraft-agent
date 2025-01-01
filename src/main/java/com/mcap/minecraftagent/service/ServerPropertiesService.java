@@ -1,5 +1,6 @@
 package com.mcap.minecraftagent.service;
 
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
@@ -12,10 +13,18 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Properties;
 
+@Slf4j
 @Service
 public class ServerPropertiesService {
+    private final ConfigurationService configService;
+    private final String baseDir;
+
+    public ServerPropertiesService(ConfigurationService configService) {
+        this.configService = configService;
+        this.baseDir = System.getProperty("user.home") + System.getProperty("file.separator") + "minecraft-servers" + System.getProperty("file.separator");
+    }
     private Properties loadProperties(String worldId) {
-        String propertiesPath = "/opt/mscs/worlds/" + worldId + "/server.properties";
+        String propertiesPath = baseDir + worldId + System.getProperty("file.separator") + "server.properties";
         Properties properties = new Properties();
         Resource resource = new FileSystemResource(propertiesPath);
         try (InputStream input = resource.getInputStream()) {
@@ -36,9 +45,17 @@ public class ServerPropertiesService {
     }
 
     public void setProperty(String worldId, Map<String, String> properties) {
-        String propertiesPath = "/opt/mscs/worlds/" + worldId + "/server.properties";
+        String propertiesPath = baseDir + worldId + System.getProperty("file.separator") + "server.properties";
         Properties propFile = loadProperties(worldId);
         for (Map.Entry<String, String> entry : properties.entrySet()) {
+            if (entry.getKey().equals("server-port")) {
+                try {
+                    this.configService.updateServerPort(worldId, Integer.parseInt(entry.getValue()));
+                } catch (IOException e) {
+                    log.error("Failed to update server port", e);
+                    throw new RuntimeException(e);
+                }
+            }
             propFile.setProperty(entry.getKey(), entry.getValue());
         }
         saveProperties(propertiesPath, propFile);
