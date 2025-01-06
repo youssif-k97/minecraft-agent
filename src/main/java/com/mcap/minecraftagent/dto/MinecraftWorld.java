@@ -1,5 +1,6 @@
 package com.mcap.minecraftagent.dto;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.Data;
 
 import java.util.List;
@@ -10,6 +11,7 @@ import java.util.Set;
 public class MinecraftWorld{
     private String id;
     private String name;
+    @JsonProperty("isActive")
     private boolean isActive;
     private List<String> players;
     private Map<String, String> properties;

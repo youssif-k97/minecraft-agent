@@ -1,5 +1,6 @@
 package com.mcap.minecraftagent.service;
 
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import java.io.*;
 import java.net.URL;
@@ -9,20 +10,24 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.Iterator;
 
+@Slf4j
 @Service
 public class MinecraftDownloadService {
     private static final String VERSION_MANIFEST = "https://piston-meta.mojang.com/mc/game/version_manifest.json";
 
     public void downloadServerJar(String version, String destination) throws IOException {
+        log.info("Starting download of server JAR. Version: {}, Destination: {}", version, destination);
         // Implementation to download server.jar for specific version
         String serverUrl = getServerUrlForVersion(version);
         try (ReadableByteChannel rbc = Channels.newChannel(new URL(serverUrl).openStream());
              FileOutputStream fos = new FileOutputStream(destination + System.getProperty("file.separator") + "server.jar")) {
             fos.getChannel().transferFrom(rbc, 0, Long.MAX_VALUE);
         }
+        log.info("Server JAR downloaded successfully");
     }
 
     private String getServerUrlForVersion(String version) {
+        log.info("Fetching server URL for version: {}", version);
         try {
             // Fetch JSON data
             ObjectMapper objectMapper = new ObjectMapper();
@@ -34,6 +39,7 @@ public class MinecraftDownloadService {
             while (versions.hasNext()) {
                 JsonNode versionObj = versions.next();
                 if (versionObj.get("id").asText().equals(version)) {
+                    log.info("Version match found: {}", version);
                     // Retrieve the version-specific URL
                     String versionInfoUrl = versionObj.get("url").asText();
     
@@ -43,8 +49,7 @@ public class MinecraftDownloadService {
                 }
             }
         } catch (IOException e) {
-            // Handle potential I/O errors
-            e.printStackTrace();
+            log.error("Error occurred while fetching server URL for version: {}", version, e);
         }
         
         return null; // Return null if version is not found or any exception occurs

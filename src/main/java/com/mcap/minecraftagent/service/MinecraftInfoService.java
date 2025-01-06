@@ -24,9 +24,12 @@ public class MinecraftInfoService {
 
     @Cacheable(value = "minecraftWorlds", unless = "#result.isEmpty()")
     public List<MinecraftWorld> getAllWorlds() {
-        return configService.getAllConfigs().stream()
+        log.info("Fetching all Minecraft worlds.");
+        List<MinecraftWorld> worlds = configService.getAllConfigs().stream()
                 .map(this::getWorldDetails)
                 .collect(Collectors.toList());
+        log.info("Fetched {} worlds.", worlds.size());
+        return worlds;
     }
 
     public MinecraftWorld getWorldDetails(WorldConfig config) {
@@ -35,7 +38,13 @@ public class MinecraftInfoService {
         details.setName(config.getWorldName());
         details.setActive(config.isRunning());
         details.setPlayers(new ArrayList<>()); // TODO: Implement player list
-        details.setProperties(propertiesService.getAllProperties(config.getWorldName()));
+        try {
+            details.setProperties(propertiesService.getAllProperties(config.getWorldName()));
+        } catch (Exception e) {
+            details.setProperties(new HashMap<>());
+            log.error("Failed to get properties for world: " + config.getWorldName(), e);
+        }
+
         details.setPort(config.getPort());
 
         MinecraftWorld.Ram ram = new MinecraftWorld.Ram();
@@ -49,5 +58,6 @@ public class MinecraftInfoService {
     @Scheduled(fixedRate = 60000)
     @CacheEvict(value = {"minecraftWorlds", "playersList"}, allEntries = true)
     public void evictCache() {
+        log.info("Evicting all entries from caches: minecraftWorlds and playersList.");
     }
 }

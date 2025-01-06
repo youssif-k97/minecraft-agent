@@ -1,6 +1,7 @@
 package com.mcap.minecraftagent.service;
 
 import com.mcap.minecraftagent.dto.Datapack;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.io.BufferedInputStream;
@@ -14,6 +15,7 @@ import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
 
+@Slf4j
 @Service
 public class DatapackService {
 
@@ -27,10 +29,13 @@ public class DatapackService {
         Path targetPath = Paths.get(worldDatapacksDir, datapackName);
 
         // Create target directory if it doesn't exist
+        log.info("Creating directory: {}", worldDatapacksDir);
         Files.createDirectories(Paths.get(worldDatapacksDir));
 
+        log.info("Starting download of datapack from URL: {} to path: {}", datapackUrl, targetPath);
         try (BufferedInputStream in = new BufferedInputStream(url.openStream());
              BufferedOutputStream out = new BufferedOutputStream(Files.newOutputStream(targetPath))) {
+            log.info("Download of datapack '{}' completed successfully.", datapackName);
 
             byte[] buffer = new byte[BUFFER_SIZE];
             int bytesRead;
@@ -51,7 +56,11 @@ public class DatapackService {
                 for (File file : files) {
                     if (file.isFile()) {
                         if (file.getName().equals(datapackName)) {
-                            file.delete();
+                            if (file.delete()) {
+                                log.info("Datapack '{}' removed successfully.", datapackName);
+                            } else {
+                                log.warn("Failed to remove datapack '{}'.", datapackName);
+                            }
                         }
                     }
                 }
@@ -73,6 +82,7 @@ public class DatapackService {
                 }
             }
         }
+        log.info("Found {} datapacks in directory: {}", datapacks.size(), worldDatapacksDir);
         return datapacks;
     }
 
