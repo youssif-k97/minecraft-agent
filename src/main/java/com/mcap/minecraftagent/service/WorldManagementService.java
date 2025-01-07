@@ -1,6 +1,7 @@
 package com.mcap.minecraftagent.service;
 
 import com.mcap.minecraftagent.dto.MinecraftWorld;
+import com.mcap.minecraftagent.pojo.MinecraftServerProcess;
 import com.mcap.minecraftagent.pojo.WorldConfig;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
@@ -14,6 +15,7 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
@@ -22,14 +24,17 @@ import java.util.zip.ZipOutputStream;
 public class WorldManagementService {
     private final ConfigurationService configService;
     private final MinecraftDownloadService downloadService;
+    private final ServerProcessManager processManager;
     private final String baseDir;
     private final Map<String, Long> runningServers = new ConcurrentHashMap<>();
 
     public WorldManagementService(
             ConfigurationService configService,
-            MinecraftDownloadService downloadService) {
+            MinecraftDownloadService downloadService,
+            ServerProcessManager processManager) {
         this.configService = configService;
         this.downloadService = downloadService;
+        this.processManager = processManager;
         this.baseDir = System.getProperty("user.home") + System.getProperty("file.separator") + "minecraft-servers" + System.getProperty("file.separator");
         new File(baseDir).mkdirs();
     }
@@ -132,25 +137,37 @@ public class WorldManagementService {
                 "worldref=" + worldName
         )
                 .directory(new File(worldDir))
-                .redirectErrorStream(true)
-                .inheritIO();
+                .redirectErrorStream(true);
         Process process = pb.start();
+        processManager.registerProcess(worldName, process);
+        log.info("Server process registered for world: {}", worldName);
         runningServers.put(worldName, process.pid());
         configService.updateServerStatus(worldName, true);
         log.info("Server for world {} started successfully with PID {}", worldName, process.pid());
+        verifyServerStart(process, worldName);
+    }
+
+    private void verifyServerStart(Process process, String worldName) {
+        try {
+            Thread.sleep(2000); // Wait for initial startup
+            if (!process.isAlive()) {
+                processManager.removeProcess(worldName);
+                throw new RuntimeException("Server failed to start");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("Server startup interrupted");
+        }
     }
 
     public void stopServer(String worldName) throws IOException {
-        log.info("Stopping server for world: {}", worldName);
-        ProcessHandle process = ProcessHandle.of(runningServers.get(worldName)).orElse(null);
-        if (process != null) {
-            process.destroy();
-            log.info("Server for world {} stopped successfully", worldName);
-            runningServers.remove(worldName);
-            configService.updateServerStatus(worldName, false);
-        } else {
-            log.warn("Stop server failed: No running server found for world {}", worldName);
+        log.info("Requesting stop for server: {}", worldName);
+
+        if (!processManager.stopServer(worldName)) {
+            throw new IOException("Failed to stop server: " + worldName);
         }
+        runningServers.remove(worldName);
+        configService.updateServerStatus(worldName, false);
     }
 
     public void restartServer(String worldName) throws IOException, InterruptedException {
