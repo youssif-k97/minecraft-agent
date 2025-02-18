@@ -1,5 +1,6 @@
 package com.mcap.minecraftagent.service;
 
+import com.mcap.minecraftagent.config.MinecraftLogHandler;
 import com.mcap.minecraftagent.dto.MinecraftWorld;
 import com.mcap.minecraftagent.pojo.MinecraftServerProcess;
 import com.mcap.minecraftagent.pojo.WorldConfig;
@@ -11,6 +12,7 @@ import org.springframework.stereotype.Service;
 import java.io.*;
 import java.nio.file.Files;
 import java.nio.file.Paths;
+import java.nio.file.StandardOpenOption;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
@@ -25,16 +27,19 @@ public class WorldManagementService {
     private final ConfigurationService configService;
     private final MinecraftDownloadService downloadService;
     private final ServerProcessManager processManager;
+    private final MinecraftLogHandler logHandler;
     private final String baseDir;
     private final Map<String, Long> runningServers = new ConcurrentHashMap<>();
 
     public WorldManagementService(
             ConfigurationService configService,
             MinecraftDownloadService downloadService,
-            ServerProcessManager processManager) {
+            ServerProcessManager processManager,
+            MinecraftLogHandler logHandler) {
         this.configService = configService;
         this.downloadService = downloadService;
         this.processManager = processManager;
+        this.logHandler = logHandler;
         this.baseDir = System.getProperty("user.home") + System.getProperty("file.separator") + "minecraft-servers" + System.getProperty("file.separator");
         new File(baseDir).mkdirs();
     }
@@ -144,6 +149,24 @@ public class WorldManagementService {
         runningServers.put(worldName, process.pid());
         configService.updateServerStatus(worldName, true);
         log.info("Server for world {} started successfully with PID {}", worldName, process.pid());
+
+        Thread logThread = new Thread(() -> {
+            try {
+                startLogCapture(process, worldName);
+            } catch (Exception e) {
+                log.error("Error in log capture thread for world {}", worldName, e);
+            } finally {
+                try {
+                    config.setRunning(false);
+                    configService.saveConfig(config);
+                } catch (IOException ex) {
+                    log.error("Error updating config after server stop for world {}", worldName, ex);
+                }
+            }
+        }, "LogCapture-" + worldName);
+        logThread.setDaemon(true);
+        logThread.start();
+
         verifyServerStart(process, worldName);
     }
 
@@ -174,6 +197,23 @@ public class WorldManagementService {
         stopServer(worldName);
         Thread.sleep(5000); // Wait for server to fully stop
         startServer(worldName);
+    }
+
+    private void startLogCapture(Process process, String worldName) {
+        new BufferedReader(new InputStreamReader(process.getInputStream())).lines()
+                .forEach(line -> {
+                    log.info("[{}] {}", worldName, line);
+                    logHandler.broadcastLog(worldName, line);
+//                    try {
+//                        Files.write(
+//                                Paths.get(baseDir, worldName, "logs", "latest.log"),
+//                                (line + System.lineSeparator()).getBytes(),
+//                                StandardOpenOption.CREATE, StandardOpenOption.APPEND
+//                        );
+//                    } catch (IOException e) {
+//                        log.error("Failed to write log", e);
+//                    }
+                });
     }
 
     public String createBackup(String worldName) throws IOException {
