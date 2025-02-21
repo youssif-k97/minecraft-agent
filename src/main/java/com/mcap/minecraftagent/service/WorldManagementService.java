@@ -170,16 +170,41 @@ public class WorldManagementService {
         verifyServerStart(process, worldName);
     }
 
-    private void verifyServerStart(Process process, String worldName) {
-        try {
-            Thread.sleep(2000); // Wait for initial startup
+    private void verifyServerStart(Process process, String worldName) throws IOException {
+        BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
+        String line;
+        long startTime = System.currentTimeMillis();
+        long timeout = 120000; // 2 minutes timeout
+        boolean serverStarted = false;
+
+        while ((System.currentTimeMillis() - startTime) < timeout) {
             if (!process.isAlive()) {
-                processManager.removeProcess(worldName);
-                throw new RuntimeException("Server failed to start");
+                int exitCode = process.exitValue();
+                log.error("Server process for world {} died during startup with exit code {}", worldName, exitCode);
+                throw new IOException("Server failed to start: Process died with exit code " + exitCode);
             }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new RuntimeException("Server startup interrupted");
+
+            if (reader.ready() && (line = reader.readLine()) != null) {
+                if (line.contains("Done") || line.contains("For help, type \"help\"")) {
+                    serverStarted = true;
+                    log.info("Server for world {} is ready and accepting connections", worldName);
+                    break;
+                }
+            }
+
+            try {
+                Thread.sleep(100);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IOException("Server startup verification was interrupted", e);
+            }
+        }
+
+        if (!process.isAlive() || !serverStarted) {
+            processManager.removeProcess(worldName);
+            process.destroy();
+            log.error("Server startup verification timed out for world {}", worldName);
+            throw new RuntimeException("Server failed to start");
         }
     }
 
