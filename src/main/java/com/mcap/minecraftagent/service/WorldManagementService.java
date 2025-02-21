@@ -2,22 +2,19 @@ package com.mcap.minecraftagent.service;
 
 import com.mcap.minecraftagent.config.MinecraftLogHandler;
 import com.mcap.minecraftagent.dto.MinecraftWorld;
-import com.mcap.minecraftagent.pojo.MinecraftServerProcess;
 import com.mcap.minecraftagent.pojo.WorldConfig;
 import jakarta.annotation.PostConstruct;
-import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.io.*;
 import java.nio.file.Files;
 import java.nio.file.Paths;
-import java.nio.file.StandardOpenOption;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.TimeUnit;
+
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
@@ -29,27 +26,45 @@ public class WorldManagementService {
     private final ServerProcessManager processManager;
     private final MinecraftLogHandler logHandler;
     private final String baseDir;
-    private final Map<String, Long> runningServers = new ConcurrentHashMap<>();
+    private Map<String, Long> runningServers;
+    private final int maxRam;
+    private final ServerPropertiesService serverPropertiesService;
 
     public WorldManagementService(
             ConfigurationService configService,
             MinecraftDownloadService downloadService,
             ServerProcessManager processManager,
-            MinecraftLogHandler logHandler) {
+            MinecraftLogHandler logHandler, ServerPropertiesService serverPropertiesService) {
         this.configService = configService;
         this.downloadService = downloadService;
         this.processManager = processManager;
         this.logHandler = logHandler;
         this.baseDir = System.getProperty("user.home") + System.getProperty("file.separator") + "minecraft-servers" + System.getProperty("file.separator");
         new File(baseDir).mkdirs();
+        this.maxRam = 4096;
+        this.serverPropertiesService = serverPropertiesService;
     }
 
     @PostConstruct
     public void discoverRunningServers() {
+        this.runningServers = new ConcurrentHashMap<>();
         log.info("Starting Minecraft server process discovery...");
         ProcessHandle.allProcesses()
                 .filter(this::isJavaProcess)
                 .forEach(this::processMinecraftServer);
+        syncServerStatus();
+    }
+
+    private void syncServerStatus() {
+        List<WorldConfig> allConfigs = configService.getAllConfigs();
+        allConfigs.forEach(config -> {
+            config.setRunning(runningServers.containsKey(config.getWorldName()));
+            try {
+                configService.saveConfig(config);
+            } catch (IOException e) {
+                log.error("Failed to sync server status", e);
+            }
+        });
     }
 
     private boolean isJavaProcess(ProcessHandle process) {
@@ -76,9 +91,9 @@ public class WorldManagementService {
 
     private Optional<String> extractWorldName(String[] args) {
         return Arrays.stream(args)
-                .filter(arg -> arg.startsWith("worldname="))
+                .filter(arg -> arg.startsWith("worldref="))
                 .findFirst()
-                .map(worldName -> worldName.substring("worldname=".length()));
+                .map(worldName -> worldName.substring("worldref=".length()));
     }
 
     private void handleDiscoveredServer(ProcessHandle process, String worldName) {
@@ -293,7 +308,29 @@ public class WorldManagementService {
     }
 
     public void updateServerRam(String worldName, MinecraftWorld.Ram ram) throws IOException, InterruptedException {
+        if (!isRamValid(ram)) {
+            log.error("Invalid RAM configuration: {}", ram);
+            throw new IllegalArgumentException("Invalid RAM configuration");
+        }
         configService.updateServerRamInfo(worldName, ram.getMin(), ram.getMax());
+        restartServer(worldName);
+    }
+
+    private boolean isRamValid(MinecraftWorld.Ram ram) {
+        return ram.getMin() >= 512 && ram.getMax() <= this.maxRam && ram.getMax() >= ram.getMin();
+    }
+
+    public void updateServerPort(String worldName, int port) throws IOException, InterruptedException {
+        WorldConfig config = configService.getConfig(worldName);
+        if (config == null) {
+            log.error("Update port failed: World {} not found", worldName);
+            throw new IllegalStateException("World not found");
+        }
+        if (configService.getAllConfigs().stream().anyMatch(w -> w.getPort() == port)) {
+            log.error("Update port failed: Port {} is already in use", port);
+            throw new IllegalStateException("Port already in use");
+        }
+        serverPropertiesService.setProperty(worldName, Map.of("server-port", String.valueOf(port)));
         restartServer(worldName);
     }
 }

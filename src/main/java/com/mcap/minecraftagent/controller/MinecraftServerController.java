@@ -134,6 +134,21 @@ public class MinecraftServerController {
         return response;
     }
 
+    @PostMapping("/worlds/{worldId}/port")
+    public ResponseEntity updateServerPort(@PathVariable String worldId, @RequestBody Map<String, String> port) {
+        log.info("Entering updateServerPort() with worldId: {} and port: {}", worldId, port);
+        try {
+            minecraftService.updateServerPort(worldId, Integer.parseInt(port.get("port")));
+        } catch (IOException | InterruptedException e) {
+            log.error("Error in updateServerPort(): {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body("Failed to update server port: " + e.getMessage());
+        }
+        ResponseEntity<String> response = ResponseEntity.ok().body("Server port updated successfully");
+        log.info("Exiting updateServerPort() with response: {}", response);
+        return response;
+    }
+
     @GetMapping("/worlds/{worldId}/datapacks")
     public ResponseEntity<DatapackResponse> getDatapacks(@PathVariable String worldId) {
         log.info("Entering getDatapacks() with worldId: {}", worldId);
