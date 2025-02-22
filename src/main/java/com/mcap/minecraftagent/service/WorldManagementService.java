@@ -12,7 +12,10 @@ import oshi.software.os.OSProcess;
 import oshi.software.os.OperatingSystem;
 
 import java.io.*;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -286,6 +289,65 @@ public class WorldManagementService {
         log.info("Backup for world {} created successfully: {}", worldName, backupFile);
         configService.updateLastBackup(worldName, backupFile);
         return backupFile;
+    }
+
+    public boolean uploadWorldForDownload(String worldName, String uploadUrl) throws IOException {
+        log.info(("Uploading world for world: {}"), worldName);
+        String worldDir = baseDir + worldName;
+
+        String tempZipFile = worldDir + ".zip";
+
+        try (FileOutputStream fos = new FileOutputStream(tempZipFile);
+             ZipOutputStream zos = new ZipOutputStream(fos)) {
+            Files.walk(Paths.get(worldDir))
+                    .filter(path -> !path.toString().contains("backups"))
+                    .forEach(path -> {
+                        try {
+                            String zipEntry = Paths.get(worldDir).relativize(path).toString();
+                            zos.putNextEntry(new ZipEntry(zipEntry));
+                            if (Files.isRegularFile(path)) {
+                                Files.copy(path, zos);
+                            }
+                            zos.closeEntry();
+                        } catch (IOException e) {
+                            log.error("Backup creation failed for world {}: {}", worldName, e.getMessage(), e);
+                            throw new UncheckedIOException(e);
+                        }
+                    });
+        }
+
+        try {
+            URL url = new URL(uploadUrl);
+            HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+            connection.setDoOutput(true);
+            connection.setRequestMethod("PUT");
+            connection.setRequestProperty("Content-Type", "application/zip");
+
+            // Get file size for Content-Length header
+            long fileSize = Files.size(Path.of(tempZipFile));
+            connection.setRequestProperty("Content-Length", String.valueOf(fileSize));
+
+            // Upload the file
+            try (InputStream input = Files.newInputStream(Path.of(tempZipFile));
+                 OutputStream output = connection.getOutputStream()) {
+                byte[] buffer = new byte[8192];
+                int bytesRead;
+                while ((bytesRead = input.read(buffer)) != -1) {
+                    output.write(buffer, 0, bytesRead);
+                }
+            }
+
+            // Check response
+            int responseCode = connection.getResponseCode();
+            boolean success = responseCode >= 200 && responseCode < 300;
+
+            connection.disconnect();
+            return success;
+
+        } finally {
+            // Clean up temporary zip file
+            Files.deleteIfExists(Path.of(tempZipFile));
+        }
     }
 
     public void deleteWorld(String worldName) throws IOException {

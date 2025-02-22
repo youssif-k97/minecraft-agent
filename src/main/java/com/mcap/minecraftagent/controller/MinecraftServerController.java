@@ -199,4 +199,15 @@ public class MinecraftServerController {
         }
         return ResponseEntity.ok().body("Backup created successfully");
     }
+
+    @PostMapping("/worlds/{worldId}/download")
+    public ResponseEntity downloadWorld(@PathVariable String worldId, @RequestBody Map<String, String> downloadRequest) {
+        try {
+            minecraftService.uploadWorldForDownload(worldId, downloadRequest.get("uploadUrl"));
+        } catch (IOException e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body("Failed to download world: " + e.getMessage());
+        }
+        return ResponseEntity.ok().body("World downloaded successfully");
+    }
 }
