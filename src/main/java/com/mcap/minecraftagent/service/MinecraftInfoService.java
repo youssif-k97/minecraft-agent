@@ -67,28 +67,4 @@ public class MinecraftInfoService {
 
         return details;
     }
-
-    @Scheduled(fixedRate = 60000)
-    public void refreshCache() {
-        log.info("Starting cache refresh for minecraftWorlds.");
-        try {
-            List<MinecraftWorld> newData = fetchWorldsData();
-            if (!newData.isEmpty()) {
-                Cache cache = cacheManager.getCache("minecraftWorlds");
-                if (cache != null) {
-                    cache.put("minecraftWorlds", newData);
-                    log.info("Successfully refreshed cache with {} worlds.", newData.size());
-                }
-            } else {
-                log.warn("Skipping cache refresh as no data was retrieved.");
-            }
-        } catch (Exception e) {
-            log.error("Failed to refresh cache", e);
-        }
-    }
-
-    @CacheEvict(value = {"minecraftWorlds", "playersList"}, allEntries = true)
-    public void evictCache() {
-        log.info("Manually evicting all entries from caches: minecraftWorlds and playersList.");
-    }
 }

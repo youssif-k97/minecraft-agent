@@ -5,7 +5,11 @@ import com.mcap.minecraftagent.dto.MinecraftWorld;
 import com.mcap.minecraftagent.pojo.WorldConfig;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.cache.CacheManager;
 import org.springframework.stereotype.Service;
+import oshi.SystemInfo;
+import oshi.software.os.OSProcess;
+import oshi.software.os.OperatingSystem;
 
 import java.io.*;
 import java.nio.file.Files;
@@ -15,6 +19,8 @@ import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
@@ -26,19 +32,23 @@ public class WorldManagementService {
     private final ServerProcessManager processManager;
     private final MinecraftLogHandler logHandler;
     private final String baseDir;
-    private Map<String, Long> runningServers;
+    private Map<String, Integer> runningServers;
     private final int maxRam;
     private final ServerPropertiesService serverPropertiesService;
+    private final CacheManager cacheManager;
 
     public WorldManagementService(
             ConfigurationService configService,
             MinecraftDownloadService downloadService,
             ServerProcessManager processManager,
-            MinecraftLogHandler logHandler, ServerPropertiesService serverPropertiesService) {
+            MinecraftLogHandler logHandler,
+            ServerPropertiesService serverPropertiesService,
+            CacheManager cacheManager) {
         this.configService = configService;
         this.downloadService = downloadService;
         this.processManager = processManager;
         this.logHandler = logHandler;
+        this.cacheManager = cacheManager;
         this.baseDir = System.getProperty("user.home") + System.getProperty("file.separator") + "minecraft-servers" + System.getProperty("file.separator");
         new File(baseDir).mkdirs();
         this.maxRam = 4096;
@@ -47,13 +57,16 @@ public class WorldManagementService {
 
     @PostConstruct
     public void discoverRunningServers() {
+        SystemInfo si = new SystemInfo();
+        OperatingSystem os = si.getOperatingSystem();
         this.runningServers = new ConcurrentHashMap<>();
         log.info("Starting Minecraft server process discovery...");
-        ProcessHandle.allProcesses()
+        os.getProcesses().stream()
                 .filter(this::isJavaProcess)
                 .forEach(this::processMinecraftServer);
         syncServerStatus();
     }
+
 
     private void syncServerStatus() {
         List<WorldConfig> allConfigs = configService.getAllConfigs();
@@ -67,37 +80,37 @@ public class WorldManagementService {
         });
     }
 
-    private boolean isJavaProcess(ProcessHandle process) {
-        return process.info().command().orElse("").contains("java");
+    private boolean isJavaProcess(OSProcess process) {
+        return process.getName().contains("java");
     }
 
-    private void processMinecraftServer(ProcessHandle process) {
+    private void processMinecraftServer(OSProcess process) {
         try {
-            String[] args = process.info().arguments().orElse(new String[0]);
+            List<String> args = process.getArguments();
             if (isMinecraftServer(args)) {
-                log.info("Found potential Minecraft server process: PID {}", process.pid());
+                log.info("Found potential Minecraft server process: PID {}", process.getProcessID());
                 extractWorldName(args).ifPresentOrElse(worldName -> handleDiscoveredServer(process, worldName),
-                        () -> log.warn("The Minecraft server with pid {} was not started by agent", process.pid()));
+                        () -> log.warn("The Minecraft server with pid {} was not started by agent", process.getProcessID()));
             }
         } catch (Exception e) {
-            log.error("Error processing process {}: {}", process.pid(), e.getMessage());
+            log.error("Error processing process {}: {}", process.getProcessID(), e.getMessage());
         }
     }
 
-    private boolean isMinecraftServer(String[] args) {
-        return Arrays.asList(args).contains("server.jar") &&
-                Arrays.asList(args).contains("nogui");
+    private boolean isMinecraftServer(List<String> args) {
+        return args.contains("server.jar") &&
+                args.contains("nogui");
     }
 
-    private Optional<String> extractWorldName(String[] args) {
-        return Arrays.stream(args)
+    private Optional<String> extractWorldName(List<String> args) {
+        return args.stream()
                 .filter(arg -> arg.startsWith("worldref="))
                 .findFirst()
                 .map(worldName -> worldName.substring("worldref=".length()));
     }
 
-    private void handleDiscoveredServer(ProcessHandle process, String worldName) {
-        log.info("Discovered Minecraft server: {} (PID: {})", worldName, process.pid());
+    private void handleDiscoveredServer(OSProcess process, String worldName) {
+        log.info("Discovered Minecraft server: {} (PID: {})", worldName, process.getProcessID());
         WorldConfig worldConfig = configService.getConfig(worldName);
         if (worldConfig == null) {
             throw new IllegalStateException("World configuration not found: " + worldName);
@@ -109,7 +122,7 @@ public class WorldManagementService {
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
-        runningServers.put(worldName, process.pid());
+        runningServers.put(worldName, process.getProcessID());
     }
 
     public void createWorld(WorldConfig config) throws IOException {
@@ -161,13 +174,14 @@ public class WorldManagementService {
         Process process = pb.start();
         processManager.registerProcess(worldName, process);
         log.info("Server process registered for world: {}", worldName);
-        runningServers.put(worldName, process.pid());
+        runningServers.put(worldName, (int) process.pid());
         configService.updateServerStatus(worldName, true);
         log.info("Server for world {} started successfully with PID {}", worldName, process.pid());
 
+        CountDownLatch serverStartedLatch = new CountDownLatch(1);
         Thread logThread = new Thread(() -> {
             try {
-                startLogCapture(process, worldName);
+                startLogCapture(process, worldName, serverStartedLatch);
             } catch (Exception e) {
                 log.error("Error in log capture thread for world {}", worldName, e);
             } finally {
@@ -182,39 +196,20 @@ public class WorldManagementService {
         logThread.setDaemon(true);
         logThread.start();
 
-        verifyServerStart(process, worldName);
+        verifyServerStart(process, worldName, serverStartedLatch);
+        this.cacheManager.getCache("minecraftWorlds").clear();
     }
 
-    private void verifyServerStart(Process process, String worldName) throws IOException {
-        BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
-        String line;
-        long startTime = System.currentTimeMillis();
+    private void verifyServerStart(Process process, String worldName, CountDownLatch serverStartedLatch) throws IOException {
+
         long timeout = 120000; // 2 minutes timeout
         boolean serverStarted = false;
-
-        while ((System.currentTimeMillis() - startTime) < timeout) {
-            if (!process.isAlive()) {
-                int exitCode = process.exitValue();
-                log.error("Server process for world {} died during startup with exit code {}", worldName, exitCode);
-                throw new IOException("Server failed to start: Process died with exit code " + exitCode);
-            }
-
-            if (reader.ready() && (line = reader.readLine()) != null) {
-                if (line.contains("Done") || line.contains("For help, type \"help\"")) {
-                    serverStarted = true;
-                    log.info("Server for world {} is ready and accepting connections", worldName);
-                    break;
-                }
-            }
-
-            try {
-                Thread.sleep(100);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new IOException("Server startup verification was interrupted", e);
-            }
+        try {
+            serverStarted = serverStartedLatch.await(timeout, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Server startup verification was interrupted", e);
         }
-
         if (!process.isAlive() || !serverStarted) {
             processManager.removeProcess(worldName);
             process.destroy();
@@ -231,6 +226,7 @@ public class WorldManagementService {
         }
         runningServers.remove(worldName);
         configService.updateServerStatus(worldName, false);
+        this.cacheManager.getCache("minecraftWorlds").clear();
     }
 
     public void restartServer(String worldName) throws IOException, InterruptedException {
@@ -239,11 +235,14 @@ public class WorldManagementService {
         startServer(worldName);
     }
 
-    private void startLogCapture(Process process, String worldName) {
+    private void startLogCapture(Process process, String worldName, CountDownLatch serverStartedLatch) {
         new BufferedReader(new InputStreamReader(process.getInputStream())).lines()
                 .forEach(line -> {
                     log.info("[{}] {}", worldName, line);
                     logHandler.broadcastLog(worldName, line);
+                    if (line.contains("Done") || line.contains("For help, type \"help\"")) {
+                        serverStartedLatch.countDown(); // Signal server is ready
+                    }
 //                    try {
 //                        Files.write(
 //                                Paths.get(baseDir, worldName, "logs", "latest.log"),
