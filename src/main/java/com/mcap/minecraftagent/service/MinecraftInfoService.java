@@ -50,7 +50,7 @@ public class MinecraftInfoService {
         details.setId(config.getWorldName());  // Using worldName as ID
         details.setName(config.getWorldName());
         details.setActive(config.isRunning());
-        details.setPlayers(new ArrayList<>()); // TODO: Implement player list
+        details.setPlayers(config.getPlayers() != null ? config.getPlayers() : new ArrayList<>());
         try {
             details.setProperties(propertiesService.getAllProperties(config.getWorldName()));
         } catch (Exception e) {

@@ -37,6 +37,7 @@ public class WorldManagementService {
     private final int maxRam;
     private final ServerPropertiesService serverPropertiesService;
     private final CacheManager cacheManager;
+    private final PlayerManagementService playerManagementService;
 
     public WorldManagementService(
             ConfigurationService configService,
@@ -44,12 +45,14 @@ public class WorldManagementService {
             ServerProcessManager processManager,
             MinecraftLogHandler logHandler,
             ServerPropertiesService serverPropertiesService,
-            CacheManager cacheManager) {
+            CacheManager cacheManager,
+            PlayerManagementService playerManagementService) {
         this.configService = configService;
         this.downloadService = downloadService;
         this.processManager = processManager;
         this.logHandler = logHandler;
         this.cacheManager = cacheManager;
+        this.playerManagementService = playerManagementService;
         this.baseDir = System.getProperty("user.home") + System.getProperty("file.separator") + "minecraft-servers" + System.getProperty("file.separator");
         new File(baseDir).mkdirs();
         this.maxRam = 4096;
@@ -265,6 +268,9 @@ public class WorldManagementService {
                     if (line.contains("Stopping server") || line.contains("Server thread/ERROR")) {
                         serverStartedFuture.completeExceptionally(
                                 new RuntimeException("Server error detected: " + line));
+                    }
+                    if (line.contains("joined the game")){
+                        playerManagementService.setPlayerOnline(worldName, line.split(" ")[0]);
                     }
                 });
     }
