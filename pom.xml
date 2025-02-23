@@ -16,6 +16,13 @@
 	<properties>
 		<java.version>21</java.version>
 	</properties>
+
+	<repositories>
+		<repository>
+			<id>jitpack.io</id>
+			<url>https://jitpack.io</url>
+		</repository>
+	</repositories>
 	<dependencies>
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
@@ -67,6 +74,12 @@
 			<groupId>com.github.oshi</groupId>
 			<artifactId>oshi-core</artifactId>
 			<version>6.4.0</version>
+		</dependency>
+
+		<dependency>
+			<groupId>io.github.MrGraversen</groupId>
+			<artifactId>minecraft-rcon</artifactId>
+			<version>0.0.16</version>
 		</dependency>
 	</dependencies>
 

@@ -2,18 +2,16 @@ package com.mcap.minecraftagent.controller;
 
 import com.mcap.minecraftagent.dto.*;
 import com.mcap.minecraftagent.pojo.WorldConfig;
-import com.mcap.minecraftagent.service.DatapackService;
-import com.mcap.minecraftagent.service.MinecraftInfoService;
-import com.mcap.minecraftagent.service.ServerPropertiesService;
+import com.mcap.minecraftagent.service.*;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.http.ResponseEntity;
-import com.mcap.minecraftagent.service.WorldManagementService;
 
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.Map;
+import java.util.concurrent.ExecutionException;
 
 @Slf4j
 @RestController
@@ -24,13 +22,16 @@ public class MinecraftServerController {
     private final MinecraftInfoService infoService;
     private final DatapackService datapackService;
     private final ServerPropertiesService propertiesService;
+    private final RconClientService rconClientService;
 
     public MinecraftServerController(WorldManagementService minecraftService, MinecraftInfoService infoService,
-                                     DatapackService datapackService, ServerPropertiesService propertiesService) {
+                                     DatapackService datapackService, ServerPropertiesService propertiesService,
+                                     RconClientService rconClientService) {
         this.propertiesService = propertiesService;
         this.infoService = infoService;
         this.minecraftService = minecraftService;
         this.datapackService = datapackService;
+        this.rconClientService = rconClientService;
     }
     @GetMapping("/worlds")
     public ResponseEntity<MinecraftWorldsResponse> getAllWorlds() {
@@ -209,5 +210,17 @@ public class MinecraftServerController {
                     .body("Failed to download world: " + e.getMessage());
         }
         return ResponseEntity.ok().body("World downloaded successfully");
+    }
+
+    @PostMapping("/worlds/{worldId}/sendCommand")
+    public ResponseEntity sendCommand(@PathVariable String worldId, @RequestBody Map<String, String> command) {
+        try {
+            rconClientService.sendCommand(command.get("command"));
+        } catch (ExecutionException e) {
+            throw new RuntimeException(e);
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
+        return ResponseEntity.ok().body("Command sent successfully");
     }
 }

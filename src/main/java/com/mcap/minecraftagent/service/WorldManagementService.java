@@ -20,10 +20,8 @@ import java.nio.file.Paths;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.*;
 
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
@@ -179,18 +177,14 @@ public class WorldManagementService {
                 .directory(new File(worldDir))
                 .redirectErrorStream(true);
         Process process = pb.start();
-        processManager.registerProcess(worldName, process);
-        log.info("Server process registered for world: {}", worldName);
-        runningServers.put(worldName, (int) process.pid());
-        configService.updateServerStatus(worldName, true);
-        log.info("Server for world {} started successfully with PID {}", worldName, process.pid());
 
-        CountDownLatch serverStartedLatch = new CountDownLatch(1);
+        CompletableFuture<Void> serverStartedFuture = new CompletableFuture<>();
         Thread logThread = new Thread(() -> {
             try {
-                startLogCapture(process, worldName, serverStartedLatch);
+                startLogCapture(process, worldName, serverStartedFuture);
             } catch (Exception e) {
                 log.error("Error in log capture thread for world {}", worldName, e);
+                serverStartedFuture.completeExceptionally(e);
             } finally {
                 try {
                     config.setRunning(false);
@@ -203,29 +197,41 @@ public class WorldManagementService {
         logThread.setDaemon(true);
         logThread.start();
 
-        verifyServerStart(process, worldName, serverStartedLatch);
+        verifyServerStart(process, worldName, serverStartedFuture);
+        processManager.registerProcess(worldName, process);
+        log.info("Server process registered for world: {}", worldName);
+        runningServers.put(worldName, (int) process.pid());
+        configService.updateServerStatus(worldName, true);
+        log.info("Server for world {} started successfully with PID {}", worldName, process.pid());
         var cache = this.cacheManager.getCache("minecraftWorlds");
         if (cache != null) {
             cache.clear();
         }
     }
 
-    private void verifyServerStart(Process process, String worldName, CountDownLatch serverStartedLatch) throws IOException {
-
+    private void verifyServerStart(Process process, String worldName, CompletableFuture<Void> serverStartedFuture) throws IOException {
         long timeout = 120000; // 2 minutes timeout
-        boolean serverStarted = false;
         try {
-            serverStarted = serverStartedLatch.await(timeout, TimeUnit.MILLISECONDS);
+            serverStartedFuture.get(timeout, TimeUnit.MILLISECONDS);
+        } catch (TimeoutException e) {
+            handleFailedStart(process, worldName, "Server startup timed out");
+        } catch (ExecutionException e) {
+            handleFailedStart(process, worldName, "Server error: " + e.getCause().getMessage());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new IOException("Server startup verification was interrupted", e);
+            handleFailedStart(process, worldName, "Startup verification interrupted");
         }
-        if (!process.isAlive() || !serverStarted) {
-            processManager.removeProcess(worldName);
-            process.destroy();
-            log.error("Server startup verification timed out for world {}", worldName);
-            throw new RuntimeException("Server failed to start");
+        if (!process.isAlive()) {
+            handleFailedStart(process, worldName, "Server process terminated unexpectedly");
         }
+    }
+
+    private void handleFailedStart(Process process, String worldName, String errorMessage) throws IOException {
+        processManager.removeProcess(worldName);
+        process.destroyForcibly();
+        log.error("Server startup failed for {}: {}", worldName, errorMessage);
+        configService.updateServerStatus(worldName, false);
+        throw new RuntimeException("Failed to start server: " + errorMessage);
     }
 
     public void stopServer(String worldName) throws IOException {
@@ -248,23 +254,18 @@ public class WorldManagementService {
         startServer(worldName);
     }
 
-    private void startLogCapture(Process process, String worldName, CountDownLatch serverStartedLatch) {
+    private void startLogCapture(Process process, String worldName, CompletableFuture<Void> serverStartedFuture) {
         new BufferedReader(new InputStreamReader(process.getInputStream())).lines()
                 .forEach(line -> {
                     log.info("[{}] {}", worldName, line);
                     logHandler.broadcastLog(worldName, line);
                     if (line.contains("Done") || line.contains("For help, type \"help\"")) {
-                        serverStartedLatch.countDown(); // Signal server is ready
+                        serverStartedFuture.complete(null);
                     }
-//                    try {
-//                        Files.write(
-//                                Paths.get(baseDir, worldName, "logs", "latest.log"),
-//                                (line + System.lineSeparator()).getBytes(),
-//                                StandardOpenOption.CREATE, StandardOpenOption.APPEND
-//                        );
-//                    } catch (IOException e) {
-//                        log.error("Failed to write log", e);
-//                    }
+                    if (line.contains("Stopping server") || line.contains("Server thread/ERROR")) {
+                        serverStartedFuture.completeExceptionally(
+                                new RuntimeException("Server error detected: " + line));
+                    }
                 });
     }
 
