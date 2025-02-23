@@ -148,6 +148,10 @@ public class WorldManagementService {
         String portProp = "server-port=" + config.getPort();
         Files.write(Paths.get(worldDir, "server.properties"), portProp.getBytes());
         log.info("World {} created successfully", config.getWorldName());
+        var cache = this.cacheManager.getCache("minecraftWorlds");
+        if (cache != null) {
+            cache.clear();
+        }
     }
 
     public void startServer(String worldName) throws IOException {
@@ -200,7 +204,10 @@ public class WorldManagementService {
         logThread.start();
 
         verifyServerStart(process, worldName, serverStartedLatch);
-        this.cacheManager.getCache("minecraftWorlds").clear();
+        var cache = this.cacheManager.getCache("minecraftWorlds");
+        if (cache != null) {
+            cache.clear();
+        }
     }
 
     private void verifyServerStart(Process process, String worldName, CountDownLatch serverStartedLatch) throws IOException {
@@ -229,7 +236,10 @@ public class WorldManagementService {
         }
         runningServers.remove(worldName);
         configService.updateServerStatus(worldName, false);
-        this.cacheManager.getCache("minecraftWorlds").clear();
+        var cache = this.cacheManager.getCache("minecraftWorlds");
+        if (cache != null) {
+            cache.clear();
+        }
     }
 
     public void restartServer(String worldName) throws IOException, InterruptedException {
