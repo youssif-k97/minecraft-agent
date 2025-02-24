@@ -59,13 +59,8 @@ public class ServerPropertiesService {
         for (Map.Entry<String, String> entry : properties.entrySet()) {
             log.info("Setting property: {} = {}", entry.getKey(), entry.getValue());
             if (entry.getKey().equals("server-port")) {
-                try {
-                    log.info("Updating server port for worldId: {}", worldId);
-                    this.configService.updateServerPort(worldId, Integer.parseInt(entry.getValue()));
-                } catch (IOException e) {
-                    log.error("Failed to update server port", e);
-                    throw new RuntimeException(e);
-                }
+                log.info("Updating server port for worldId: {}", worldId);
+                this.configService.updateServerPort(worldId, Integer.parseInt(entry.getValue()));
             }
             propFile.setProperty(entry.getKey(), entry.getValue());
         }
