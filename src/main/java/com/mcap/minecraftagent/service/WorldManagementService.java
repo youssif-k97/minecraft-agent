@@ -76,11 +76,7 @@ public class WorldManagementService {
         List<WorldConfig> allConfigs = configService.getAllConfigs();
         allConfigs.forEach(config -> {
             config.setRunning(runningServers.containsKey(config.getWorldName()));
-            try {
-                configService.saveConfig(config);
-            } catch (IOException e) {
-                log.error("Failed to sync server status", e);
-            }
+            configService.saveConfig(config);
         });
     }
 
@@ -121,11 +117,7 @@ public class WorldManagementService {
         }
         worldConfig.setRunning(true);
         worldConfig.setLastStarted(LocalDateTime.now());
-        try {
-            configService.saveConfig(worldConfig);
-        } catch (IOException e) {
-            throw new RuntimeException(e);
-        }
+        configService.saveConfig(worldConfig);
         runningServers.put(worldName, process.getProcessID());
     }
 
@@ -189,12 +181,8 @@ public class WorldManagementService {
                 log.error("Error in log capture thread for world {}", worldName, e);
                 serverStartedFuture.completeExceptionally(e);
             } finally {
-                try {
-                    config.setRunning(false);
-                    configService.saveConfig(config);
-                } catch (IOException ex) {
-                    log.error("Error updating config after server stop for world {}", worldName, ex);
-                }
+                config.setRunning(false);
+                configService.saveConfig(config);
             }
         }, "LogCapture-" + worldName);
         logThread.setDaemon(true);
