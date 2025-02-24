@@ -1,14 +1,20 @@
 package com.mcap.minecraftagent.pojo;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import jakarta.persistence.*;
 import lombok.Data;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 
+@Entity
 @Data
-@JsonIgnoreProperties(ignoreUnknown = true)
 public class WorldConfig {
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
     // Basic settings
     private String worldName;
     private String serverVersion;
@@ -25,5 +31,21 @@ public class WorldConfig {
     private String lastBackup;
 
     // Players
-    private List<Player> players;
+    @ManyToMany
+    @JoinTable(
+            name = "world_players",
+            joinColumns = @JoinColumn(name = "world_id"),
+            inverseJoinColumns = @JoinColumn(name = "player_id")
+    )
+    private List<Player> players = new ArrayList<>();
+
+    // Helper method to add a player
+    public void addPlayer(Player player) {
+        if (players == null) {
+            players = new ArrayList<>();
+        }
+        if (!players.contains(player)) {
+            players.add(player);
+        }
+    }
 }
