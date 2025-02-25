@@ -1,6 +1,5 @@
 package com.mcap.minecraftagent.pojo;
 
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import jakarta.persistence.*;
 import lombok.Data;
 
@@ -30,22 +29,28 @@ public class WorldConfig {
     private LocalDateTime lastStarted;
     private String lastBackup;
 
-    // Players
-    @ManyToMany
-    @JoinTable(
-            name = "world_players",
-            joinColumns = @JoinColumn(name = "world_id"),
-            inverseJoinColumns = @JoinColumn(name = "player_id")
-    )
-    private List<Player> players = new ArrayList<>();
+    // Players - using the join entity now
+    @OneToMany(mappedBy = "world", cascade = CascadeType.ALL, orphanRemoval = true)
+    private List<WorldPlayer> worldPlayers = new ArrayList<>();
 
-    // Helper method to add a player
-    public void addPlayer(Player player) {
-        if (players == null) {
-            players = new ArrayList<>();
+    // Helper method to add a player with world-specific attributes
+    public void addPlayer(Player player, boolean isBanned, LocalDateTime lastLogin) {
+        WorldPlayer worldPlayer = new WorldPlayer();
+        worldPlayer.setWorld(this);
+        worldPlayer.setPlayer(player);
+        worldPlayer.setBanned(isBanned);
+        worldPlayer.setLastLogin(lastLogin);
+
+        worldPlayers.add(worldPlayer);
+        player.getWorldPlayers().add(worldPlayer);
+    }
+
+    // Helper method to get all player entities
+    public List<Player> getPlayers() {
+        List<Player> players = new ArrayList<>();
+        for (WorldPlayer worldPlayer : worldPlayers) {
+            players.add(worldPlayer.getPlayer());
         }
-        if (!players.contains(player)) {
-            players.add(player);
-        }
+        return players;
     }
 }
