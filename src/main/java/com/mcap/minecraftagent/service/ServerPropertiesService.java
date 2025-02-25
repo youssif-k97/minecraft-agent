@@ -61,6 +61,8 @@ public class ServerPropertiesService {
             if (entry.getKey().equals("server-port")) {
                 log.info("Updating server port for worldId: {}", worldId);
                 this.configService.updateServerPort(worldId, Integer.parseInt(entry.getValue()));
+                // update rcon port as well when port is updated
+                propFile.setProperty("rcon.port", String.valueOf(Integer.parseInt(entry.getValue())+10));
             }
             propFile.setProperty(entry.getKey(), entry.getValue());
         }

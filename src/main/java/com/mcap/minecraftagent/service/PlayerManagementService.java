@@ -4,8 +4,10 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mcap.minecraftagent.pojo.Player;
 import com.mcap.minecraftagent.pojo.WorldConfig;
+import com.mcap.minecraftagent.repository.IPlayerRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.io.File;
 import java.io.IOException;
@@ -19,12 +21,15 @@ public class PlayerManagementService {
     private final String baseDir;
     private final RconClientService rconClientService;
     private final ConfigurationService configService;
+    private final IPlayerRepository playerRepository;
     private final ObjectMapper objectMapper;
 
-    public PlayerManagementService(RconClientService rconClientService, ConfigurationService configService, ObjectMapper objectMapper) {
+    public PlayerManagementService(RconClientService rconClientService, ConfigurationService configService,
+                                   ObjectMapper objectMapper, IPlayerRepository playerRepository) {
         this.baseDir = System.getProperty("user.home") + FileSystems.getDefault().getSeparator() + "minecraft-servers" + FileSystems.getDefault().getSeparator();
         this.rconClientService = rconClientService;
         this.configService = configService;
+        this.playerRepository = playerRepository;
         this.objectMapper = objectMapper;
     }
 
@@ -58,7 +63,20 @@ public class PlayerManagementService {
         return config.getPlayers() != null ? config.getPlayers() : new ArrayList<>();
     }
 
-    public void setPlayerOnline(String worldName, String username) {
+    @Transactional
+    public void setPlayerOnline(String worldName, String line) {
+        String username = null;
+        if (line != null && line.contains("joined the game")) {
+            int infoIndex = line.lastIndexOf("]: ");
+            if (infoIndex >= 0) {
+                String message = line.substring(infoIndex + 3);
+                int joinedIndex = message.indexOf(" joined the game");
+                if (joinedIndex > 0) {
+                    username = message.substring(0, joinedIndex);
+                }
+            }
+        }
+        
         if (username != null) {
             try {
                 String uuid = findUuidFromUsercache(worldName, username);
@@ -90,8 +108,14 @@ public class PlayerManagementService {
             .orElse(null);
     }
 
-    private void updatePlayerInfo(String worldName, String uuid, String username) throws IOException {
+    @Transactional
+    protected void updatePlayerInfo(String worldName, String uuid, String username) throws IOException {
         WorldConfig config = configService.getConfig(worldName);
+        if (config == null) {
+            log.error("World config not found for world: {}", worldName);
+            return;
+        }
+
         if (config.getPlayers() == null) {
             config.setPlayers(new ArrayList<>());
         }
@@ -112,6 +136,11 @@ public class PlayerManagementService {
                 player.setUsername(username);
             }
             player.setLastLogin(LocalDateTime.now());
+            try {
+                this.playerRepository.save(player);
+            } catch (Exception e) {
+                log.error("Error saving player info: {}", e.getMessage(), e);
+            }
         } else {
             Player newPlayer = new Player();
             newPlayer.setUuid(uuid);
@@ -119,15 +148,31 @@ public class PlayerManagementService {
             newPlayer.setLastLogin(LocalDateTime.now());
             newPlayer.setPrevUsernames(new ArrayList<>());
             newPlayer.setBanned(false);
-            config.getPlayers().add(newPlayer);
+            try {
+                this.playerRepository.save(newPlayer);
+            } catch (Exception e) {
+                log.error("Error saving player info: {}", e.getMessage(), e);
+            }
+
+            try {
+                config.addPlayer(newPlayer);
+            } catch (Exception e) {
+                log.error("Error adding player to world config: {}", e.getMessage());
+                config.setPlayers(new ArrayList<>());
+                config.getPlayers().add(newPlayer);
+            }
         }
 
-        configService.saveConfig(config);
+        try {
+            configService.saveConfig(config);
+        } catch (Exception e) {
+            log.error("Error saving player info: {}", e.getMessage(), e);
+        }
     }
 
     private static class UsercacheEntry {
         public String name;
         public String uuid;
-        public long expiresOn;
+        public String expiresOn;
     }
 }

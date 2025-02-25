@@ -138,13 +138,30 @@ public class WorldManagementService {
         log.info("Saving configuration for world: {}", config.getWorldName());
         configService.saveConfig(config);
         Files.write(Paths.get(worldDir, "eula.txt"), "eula=true".getBytes());
-        String portProp = "server-port=" + config.getPort();
-        Files.write(Paths.get(worldDir, "server.properties"), portProp.getBytes());
+        
+        StringBuilder propertiesContent = new StringBuilder();
+        propertiesContent.append("server-port=").append(config.getPort()).append("\n");
+        propertiesContent.append("enable-rcon=true\n");
+        propertiesContent.append("rcon.port=").append(config.getPort() + 10).append("\n"); 
+        propertiesContent.append("rcon.password=").append(generateRconPassword()).append("\n");
+        
+        Files.write(Paths.get(worldDir, "server.properties"), propertiesContent.toString().getBytes());
+        
         log.info("World {} created successfully", config.getWorldName());
         var cache = this.cacheManager.getCache("minecraftWorlds");
         if (cache != null) {
             cache.clear();
         }
+    }
+
+    private String generateRconPassword() {
+        String chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*";
+        StringBuilder password = new StringBuilder();
+        Random random = new Random();
+        for (int i = 0; i < 12; i++) {
+            password.append(chars.charAt(random.nextInt(chars.length())));
+        }
+        return password.toString();
     }
 
     public void startServer(String worldName) throws IOException {
@@ -258,7 +275,11 @@ public class WorldManagementService {
                                 new RuntimeException("Server error detected: " + line));
                     }
                     if (line.contains("joined the game")){
-                        playerManagementService.setPlayerOnline(worldName, line.split(" ")[0]);
+                        try {
+                            playerManagementService.setPlayerOnline(worldName, line);
+                        } catch (Exception e) {
+                            log.error("Failed to set player online", e);
+                        }
                     }
                 });
     }
