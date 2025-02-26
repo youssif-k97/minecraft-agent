@@ -1,5 +1,6 @@
 package com.mcap.minecraftagent.service;
 
+import com.mcap.minecraftagent.pojo.WorldConfig;
 import io.graversen.minecraft.rcon.MinecraftRcon;
 import io.graversen.minecraft.rcon.RconResponse;
 import io.graversen.minecraft.rcon.commands.PlayerListCommand;
@@ -13,14 +14,23 @@ import io.graversen.minecraft.rcon.service.MinecraftRconService;
 import io.graversen.minecraft.rcon.service.RconDetails;
 import io.graversen.minecraft.rcon.util.Colors;
 import io.graversen.minecraft.rcon.util.Selectors;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
 
 @Service
+@Slf4j
 public class RconClientService {
+
+    private final ConfigurationService configurationService;
+
+    public RconClientService(ConfigurationService configurationService) {
+        this.configurationService = configurationService;
+    }
 
     public void sendCommand(String command) throws ExecutionException, InterruptedException {
 
@@ -63,5 +73,39 @@ public class RconClientService {
         minecraftRcon.sendAsync(tellRawCompositeCommand);
         PlayerNamesMapper list = new PlayerNamesMapper();
         List<String> names = list.apply(minecraftRcon.sendAsync(PlayerListCommand.names()).get()).getPlayerNames();
+    }
+
+    public List<String> getOnlinePlayers(String worldName){
+        WorldConfig world = this.configurationService.getConfig(worldName);
+        List<String> playerNames = new ArrayList<>();
+        MinecraftRconService minecraftRconService = null;
+        try {
+            minecraftRconService = new MinecraftRconService(
+                    new RconDetails("localhost", world.getPort()+10, world.getRconPassword()),
+                    ConnectOptions.defaults());
+            
+            // Increase connection timeout and verify connection success
+            boolean connected = minecraftRconService.connectBlocking(Duration.ofSeconds(10));
+            if (!connected) {
+                log.error("Failed to connect to RCON server");
+                return playerNames;
+            }
+
+            final MinecraftRcon minecraftRcon = minecraftRconService.minecraftRcon().orElseThrow(IllegalStateException::new);
+            PlayerNamesMapper list = new PlayerNamesMapper();
+            playerNames = list.apply(minecraftRcon.sendAsync(PlayerListCommand.names()).get()).getPlayerNames();
+        } catch (ExecutionException e) {
+            log.error("Error while getting online players", e);
+        } catch (InterruptedException e) {
+            log.error("Interrupted while getting online players", e);
+            Thread.currentThread().interrupt(); // Preserve interrupt status
+        } catch (RuntimeException e) {
+            log.error("Unexpected error during RCON operation", e);
+        } finally {
+            if (minecraftRconService != null) {
+                minecraftRconService.disconnect(); // Ensure cleanup
+            }
+        }
+        return playerNames;
     }
 }

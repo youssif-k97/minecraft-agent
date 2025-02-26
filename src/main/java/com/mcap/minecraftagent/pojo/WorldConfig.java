@@ -28,24 +28,12 @@ public class WorldConfig {
     private LocalDateTime createdAt;
     private LocalDateTime lastStarted;
     private String lastBackup;
+    private String rconPassword;
 
-    // Players - using the join entity now
+    // Players
     @OneToMany(mappedBy = "world", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<WorldPlayer> worldPlayers = new ArrayList<>();
 
-    // Helper method to add a player with world-specific attributes
-    public void addPlayer(Player player, boolean isBanned, LocalDateTime lastLogin) {
-        WorldPlayer worldPlayer = new WorldPlayer();
-        worldPlayer.setWorld(this);
-        worldPlayer.setPlayer(player);
-        worldPlayer.setBanned(isBanned);
-        worldPlayer.setLastLogin(lastLogin);
-
-        worldPlayers.add(worldPlayer);
-        player.getWorldPlayers().add(worldPlayer);
-    }
-
-    // Helper method to get all player entities
     public List<Player> getPlayers() {
         List<Player> players = new ArrayList<>();
         for (WorldPlayer worldPlayer : worldPlayers) {

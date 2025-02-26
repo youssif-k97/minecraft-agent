@@ -136,6 +136,8 @@ public class WorldManagementService {
         log.info("Downloading server jar for world: {}", config.getWorldName());
         downloadService.downloadServerJar(config.getServerVersion(), worldDir);
         log.info("Saving configuration for world: {}", config.getWorldName());
+        String rconPassword = generateRconPassword();
+        config.setRconPassword(rconPassword);
         configService.saveConfig(config);
         Files.write(Paths.get(worldDir, "eula.txt"), "eula=true".getBytes());
         
@@ -143,7 +145,7 @@ public class WorldManagementService {
         propertiesContent.append("server-port=").append(config.getPort()).append("\n");
         propertiesContent.append("enable-rcon=true\n");
         propertiesContent.append("rcon.port=").append(config.getPort() + 10).append("\n"); 
-        propertiesContent.append("rcon.password=").append(generateRconPassword()).append("\n");
+        propertiesContent.append("rcon.password=").append(config.getRconPassword()).append("\n");
         
         Files.write(Paths.get(worldDir, "server.properties"), propertiesContent.toString().getBytes());
         

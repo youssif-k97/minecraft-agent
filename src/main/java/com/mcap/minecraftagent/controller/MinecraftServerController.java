@@ -23,15 +23,17 @@ public class MinecraftServerController {
     private final DatapackService datapackService;
     private final ServerPropertiesService propertiesService;
     private final RconClientService rconClientService;
+    private final PlayerManagementService playerService;
 
     public MinecraftServerController(WorldManagementService minecraftService, MinecraftInfoService infoService,
                                      DatapackService datapackService, ServerPropertiesService propertiesService,
-                                     RconClientService rconClientService) {
+                                     RconClientService rconClientService, PlayerManagementService playerService) {
         this.propertiesService = propertiesService;
         this.infoService = infoService;
         this.minecraftService = minecraftService;
         this.datapackService = datapackService;
         this.rconClientService = rconClientService;
+        this.playerService = playerService;
     }
     @GetMapping("/worlds")
     public ResponseEntity<MinecraftWorldsResponse> getAllWorlds() {
@@ -216,11 +218,19 @@ public class MinecraftServerController {
     public ResponseEntity sendCommand(@PathVariable String worldId, @RequestBody Map<String, String> command) {
         try {
             rconClientService.sendCommand(command.get("command"));
-        } catch (ExecutionException e) {
-            throw new RuntimeException(e);
-        } catch (InterruptedException e) {
+        } catch (ExecutionException | InterruptedException e) {
             throw new RuntimeException(e);
         }
         return ResponseEntity.ok().body("Command sent successfully");
+    }
+
+    @GetMapping("/worlds/{worldId}/players")
+    public ResponseEntity getPlayers(@PathVariable String worldId) {
+        try {
+            return ResponseEntity.ok(new PlayerDtoResponse(playerService.getPlayers(worldId)));
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body("Failed to get players: " + e.getMessage());
+        }
     }
 }
