@@ -5,6 +5,7 @@ import io.graversen.minecraft.rcon.MinecraftRcon;
 import io.graversen.minecraft.rcon.RconResponse;
 import io.graversen.minecraft.rcon.commands.PlayerListCommand;
 import io.graversen.minecraft.rcon.commands.SayCommand;
+import io.graversen.minecraft.rcon.commands.StopCommand;
 import io.graversen.minecraft.rcon.commands.tellraw.TellRawCommand;
 import io.graversen.minecraft.rcon.commands.tellraw.TellRawCommandBuilder;
 import io.graversen.minecraft.rcon.commands.tellraw.TellRawCompositeCommand;
@@ -21,6 +22,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
 
 @Service
 @Slf4j
@@ -107,5 +109,35 @@ public class RconClientService {
             }
         }
         return playerNames;
+    }
+
+    public boolean stopServer(String worldName){
+        WorldConfig world = this.configurationService.getConfig(worldName);
+        MinecraftRconService minecraftRconService = null;
+        try {
+            minecraftRconService = new MinecraftRconService(
+                    new RconDetails("localhost", world.getPort()+10, world.getRconPassword()),
+                    ConnectOptions.defaults());
+
+            boolean connected = minecraftRconService.connectBlocking(Duration.ofSeconds(10));
+            if (!connected) {
+                log.error("Failed to connect to RCON server");
+                return false;
+            }
+
+            final MinecraftRcon minecraftRcon = minecraftRconService.minecraftRcon().orElseThrow(IllegalStateException::new);
+            Future<RconResponse> response = minecraftRcon.sendAsync(new StopCommand());
+            return response.get().getResponseString().contains("Stopping server");
+        } catch (RuntimeException e) {
+            log.error("Unexpected error during RCON operation", e);
+        } catch (ExecutionException e) {
+            log.error("Error while stopping server", e);
+        } catch (InterruptedException e) {
+            log.error("Interrupted while stopping server", e);
+        } finally {
+            if (minecraftRconService != null)
+                minecraftRconService.disconnect();
+        }
+        return false;
     }
 }
