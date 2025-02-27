@@ -3,6 +3,7 @@ package com.mcap.minecraftagent.service;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mcap.minecraftagent.dto.PlayerDto;
+import com.mcap.minecraftagent.dto.PlayerDtoResponse;
 import com.mcap.minecraftagent.pojo.Player;
 import com.mcap.minecraftagent.pojo.WorldConfig;
 import com.mcap.minecraftagent.pojo.WorldPlayer;
@@ -10,6 +11,8 @@ import com.mcap.minecraftagent.repository.IPlayerRepository;
 import com.mcap.minecraftagent.repository.IWorldPlayerRepository;
 import jakarta.transaction.Transactional;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 
 import java.io.File;
@@ -37,6 +40,27 @@ public class PlayerManagementService {
         this.objectMapper = objectMapper;
         this.playerRepository = playerRepository;
         this.worldPlayerRepository = worldPlayerRepository;
+    }
+
+    @Cacheable(value = "playerInfo", key = "#worldName")
+    public PlayerDtoResponse getPlayers(String worldName) {
+        log.info("Fetching player information for world: {}", worldName);
+        List<PlayerDto> players = fetchPlayers(worldName);
+        return new PlayerDtoResponse(players);
+    }
+
+    public List<PlayerDto> fetchPlayers(String worldName) {
+        List<WorldPlayer> worldPlayers = worldPlayerRepository.findAllByWorldName(worldName);
+        List<String> onlinePlayers = rconClientService.getOnlinePlayers(worldName);
+        if (worldPlayers.isEmpty()) {
+            return new ArrayList<>();
+        }else {
+            return worldPlayers.stream()
+                    .map(wp -> new PlayerDto(wp.getPlayer().getUsername(), wp.getLastLogin().toString(),
+                            wp.isBanned(), wp.isOp(), wp.isBypassesPlayerLimit(), wp.getOpLevel(), wp.isWhitelisted(),
+                            onlinePlayers.contains(wp.getPlayer().getUsername())))
+                    .toList();
+        }
     }
 
     public void kickPlayer(String worldName, String playerName) {
@@ -114,21 +138,6 @@ public class PlayerManagementService {
             log.error("Failed to ban player: " + playerName, e);
         }
     }
-
-    public List<PlayerDto> getPlayers(String worldName) {
-        List<WorldPlayer> worldPlayers = worldPlayerRepository.findAllByWorldName(worldName);
-        List<String> onlinePlayers = rconClientService.getOnlinePlayers(worldName);
-        if (worldPlayers.isEmpty()) {
-            return new ArrayList<>();
-        }else {
-            return worldPlayers.stream()
-                    .map(wp -> new PlayerDto(wp.getPlayer().getUsername(), wp.getLastLogin().toString(),
-                            wp.isBanned(), wp.isOp(), wp.isWhitelisted(),
-                            onlinePlayers.contains(wp.getPlayer().getUsername())))
-                    .toList();
-        }
-    }
-
 
     @Transactional
     public void setPlayerOnline(String worldName, String line) {
@@ -238,6 +247,11 @@ public class PlayerManagementService {
         worldPlayer.setLastLogin(LocalDateTime.now());
 
         worldPlayerRepository.save(worldPlayer);
+    }
+
+    @CacheEvict(value = "playerInfo", key = "#worldName")
+    public void evictPlayerCache(String worldName) {
+        log.info("Evicting player cache for world: {}", worldName);
     }
 
     private static class UsercacheEntry {

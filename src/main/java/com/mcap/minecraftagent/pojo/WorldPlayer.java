@@ -23,6 +23,8 @@ public class WorldPlayer {
 
     private boolean isBanned;
     private LocalDateTime lastLogin;
-    private boolean isOp;
     private boolean isWhitelisted;
+    private boolean isOp;
+    private boolean bypassesPlayerLimit;
+    private int opLevel;
 }

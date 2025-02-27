@@ -1,31 +1,216 @@
 package com.mcap.minecraftagent.service;
 
+import com.mcap.minecraftagent.config.MinecraftLogHandler;
+import com.mcap.minecraftagent.pojo.WorldConfig;
+import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
+import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
+import oshi.SystemInfo;
+import oshi.software.os.OSProcess;
+import oshi.software.os.OperatingSystem;
 
+import java.io.BufferedReader;
 import java.io.BufferedWriter;
+import java.io.File;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
+import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 @Slf4j
 @Component
 public class ServerProcessManager {
     private final Map<String, Process> activeProcesses = new ConcurrentHashMap<>();
+    @Getter
+    private final Map<String, Integer> runningServers = new ConcurrentHashMap<>();
+    private final ConfigurationService configService;
+    private final MinecraftLogHandler logHandler;
+    private final PlayerManagementService playerManagementService;
+    private final String baseDir;
+
+    public ServerProcessManager(
+            ConfigurationService configService,
+            MinecraftLogHandler logHandler,
+            PlayerManagementService playerManagementService) {
+        this.configService = configService;
+        this.logHandler = logHandler;
+        this.playerManagementService = playerManagementService;
+        this.baseDir = System.getProperty("user.home") + System.getProperty("file.separator") + "minecraft-servers" + System.getProperty("file.separator");
+    }
+
+    @PostConstruct
+    public void discoverRunningServers() {
+        SystemInfo si = new SystemInfo();
+        OperatingSystem os = si.getOperatingSystem();
+        log.info("Starting Minecraft server process discovery...");
+        os.getProcesses().stream()
+                .filter(this::isJavaProcess)
+                .forEach(this::processMinecraftServer);
+        syncServerStatus();
+    }
+
+    private boolean isJavaProcess(OSProcess process) {
+        return process.getName().contains("java");
+    }
+
+    private void processMinecraftServer(OSProcess process) {
+        try {
+            List<String> args = process.getArguments();
+            if (isMinecraftServer(args)) {
+                log.info("Found potential Minecraft server process: PID {}", process.getProcessID());
+                extractWorldName(args).ifPresentOrElse(worldName -> handleDiscoveredServer(process, worldName),
+                        () -> log.warn("The Minecraft server with pid {} was not started by agent", process.getProcessID()));
+            }
+        } catch (Exception e) {
+            log.error("Error processing process {}: {}", process.getProcessID(), e.getMessage());
+        }
+    }
+
+    private boolean isMinecraftServer(List<String> args) {
+        return args.contains("server.jar") &&
+                args.contains("nogui");
+    }
+
+    private Optional<String> extractWorldName(List<String> args) {
+        return args.stream()
+                .filter(arg -> arg.startsWith("worldref="))
+                .findFirst()
+                .map(worldName -> worldName.substring("worldref=".length()));
+    }
+
+    private void handleDiscoveredServer(OSProcess process, String worldName) {
+        log.info("Discovered Minecraft server: {} (PID: {})", worldName, process.getProcessID());
+        WorldConfig worldConfig = configService.getConfig(worldName);
+        if (worldConfig == null) {
+            throw new IllegalStateException("World configuration not found: " + worldName);
+        }
+        worldConfig.setRunning(true);
+        worldConfig.setLastStarted(java.time.LocalDateTime.now());
+        configService.saveConfig(worldConfig);
+        runningServers.put(worldName, process.getProcessID());
+    }
+
+    private void syncServerStatus() {
+        List<WorldConfig> allConfigs = configService.getAllConfigs();
+        allConfigs.forEach(config -> {
+            config.setRunning(runningServers.containsKey(config.getWorldName()));
+            configService.saveConfig(config);
+        });
+    }
 
     public void registerProcess(String worldName, Process process) {
         activeProcesses.put(worldName, process);
+        runningServers.put(worldName, (int) process.pid());
     }
 
-    public Process getProcess(String worldName) {
-        return activeProcesses.get(worldName);
-    }
 
     public void removeProcess(String worldName) {
         activeProcesses.remove(worldName);
+        runningServers.remove(worldName);
+    }
+
+    public Process startServer(String worldName, WorldConfig config) throws IOException {
+        log.info("Starting server for world: {}", worldName);
+        if (config == null) {
+            log.error("Start server failed: World {} not found", worldName);
+            throw new IllegalStateException("World not found");
+        }
+        if (runningServers.containsKey(worldName)) {
+            log.warn("Start server aborted: World {} is already running", worldName);
+            throw new IllegalStateException("Server already running");
+        }
+
+        String worldDir = baseDir + worldName;
+        ProcessBuilder pb = new ProcessBuilder(
+                "java",
+                "-Xmx" + config.getMaxMemory() + "M",
+                "-Xms" + config.getMinMemory() + "M",
+                "-jar",
+                "server.jar",
+                "nogui",
+                "worldref=" + worldName
+        )
+                .directory(new File(worldDir))
+                .redirectErrorStream(true);
+        Process process = pb.start();
+
+        CompletableFuture<Void> serverStartedFuture = new CompletableFuture<>();
+        Thread logThread = new Thread(() -> {
+            try {
+                startLogCapture(process, worldName, serverStartedFuture);
+            } catch (Exception e) {
+                log.error("Error in log capture thread for world {}", worldName, e);
+                serverStartedFuture.completeExceptionally(e);
+            } finally {
+                config.setRunning(false);
+                configService.saveConfig(config);
+            }
+        }, "LogCapture-" + worldName);
+        logThread.setDaemon(true);
+        logThread.start();
+
+        verifyServerStart(process, worldName, serverStartedFuture);
+        registerProcess(worldName, process);
+        log.info("Server process registered for world: {}", worldName);
+        configService.updateServerStatus(worldName, true);
+        log.info("Server for world {} started successfully with PID {}", worldName, process.pid());
+        return process;
+    }
+
+    private void startLogCapture(Process process, String worldName, CompletableFuture<Void> serverStartedFuture) {
+        new BufferedReader(new InputStreamReader(process.getInputStream())).lines()
+                .forEach(line -> {
+                    log.info("[{}] {}", worldName, line);
+                    logHandler.broadcastLog(worldName, line);
+                    if (line.contains("Done") || line.contains("For help, type \"help\"")) {
+                        serverStartedFuture.complete(null);
+                    }
+                    if (line.contains("Stopping server") || line.contains("Server thread/ERROR")) {
+                        serverStartedFuture.completeExceptionally(
+                                new RuntimeException("Server error detected: " + line));
+                    }
+                    if (line.contains("joined the game")){
+                        try {
+                            playerManagementService.setPlayerOnline(worldName, line);
+                        } catch (Exception e) {
+                            log.error("Failed to set player online", e);
+                        }
+                    }
+                });
+    }
+
+    private void verifyServerStart(Process process, String worldName, CompletableFuture<Void> serverStartedFuture) throws IOException {
+        long timeout = 120000; // 2 minutes timeout
+        try {
+            serverStartedFuture.get(timeout, TimeUnit.MILLISECONDS);
+        } catch (TimeoutException e) {
+            handleFailedStart(process, worldName, "Server startup timed out");
+        } catch (ExecutionException e) {
+            handleFailedStart(process, worldName, "Server error: " + e.getCause().getMessage());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            handleFailedStart(process, worldName, "Startup verification interrupted");
+        }
+        if (!process.isAlive()) {
+            handleFailedStart(process, worldName, "Server process terminated unexpectedly");
+        }
+    }
+
+    private void handleFailedStart(Process process, String worldName, String errorMessage) throws IOException {
+        removeProcess(worldName);
+        process.destroyForcibly();
+        log.error("Server startup failed for {}: {}", worldName, errorMessage);
+        configService.updateServerStatus(worldName, false);
+        throw new RuntimeException("Failed to start server: " + errorMessage);
     }
 
     public boolean stopServer(String worldName) {
@@ -50,10 +235,10 @@ public class ServerProcessManager {
                 bufferedWriter.flush();
             }
 
-
             if (serverProcess.waitFor(30, TimeUnit.SECONDS)) {
                 log.info("Server {} stopped gracefully", worldName);
                 removeProcess(worldName);
+                configService.updateServerStatus(worldName, false);
                 return true;
             }
 
@@ -63,6 +248,7 @@ public class ServerProcessManager {
             if (serverProcess.waitFor(10, TimeUnit.SECONDS)) {
                 log.info("Server {} stopped after destroy()", worldName);
                 removeProcess(worldName);
+                configService.updateServerStatus(worldName, false);
                 return true;
             }
 
@@ -70,6 +256,7 @@ public class ServerProcessManager {
             serverProcess.destroyForcibly();
             boolean terminated = serverProcess.waitFor(5, TimeUnit.SECONDS);
             removeProcess(worldName);
+            configService.updateServerStatus(worldName, false);
 
             return terminated;
 
@@ -78,13 +265,9 @@ public class ServerProcessManager {
             Thread.currentThread().interrupt();
             serverProcess.destroyForcibly();
             removeProcess(worldName);
+            configService.updateServerStatus(worldName, false);
             return false;
         }
-    }
-
-    public boolean isProcessRunning(String worldName) {
-        Process serverProcess = activeProcesses.get(worldName);
-        return serverProcess != null && serverProcess.isAlive();
     }
 
     @PreDestroy

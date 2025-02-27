@@ -5,6 +5,8 @@ public record PlayerDto(
         String lastLogin,
         boolean isBanned,
         boolean isOp,
+        boolean bypassesPlayerLimit,
+        int opLevel,
         boolean isWhitelisted,
         boolean isOnline
 ) {}

@@ -11,6 +11,7 @@ import org.springframework.http.ResponseEntity;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ExecutionException;
 
 @Slf4j
@@ -19,17 +20,15 @@ import java.util.concurrent.ExecutionException;
 public class MinecraftServerController {
 
     private final WorldManagementService minecraftService;
-    private final MinecraftInfoService infoService;
     private final DatapackService datapackService;
     private final ServerPropertiesService propertiesService;
     private final RconClientService rconClientService;
     private final PlayerManagementService playerService;
 
-    public MinecraftServerController(WorldManagementService minecraftService, MinecraftInfoService infoService,
-                                     DatapackService datapackService, ServerPropertiesService propertiesService,
-                                     RconClientService rconClientService, PlayerManagementService playerService) {
+    public MinecraftServerController(WorldManagementService minecraftService, DatapackService datapackService,
+                                     ServerPropertiesService propertiesService, RconClientService rconClientService,
+                                     PlayerManagementService playerService) {
         this.propertiesService = propertiesService;
-        this.infoService = infoService;
         this.minecraftService = minecraftService;
         this.datapackService = datapackService;
         this.rconClientService = rconClientService;
@@ -38,7 +37,7 @@ public class MinecraftServerController {
     @GetMapping("/worlds")
     public ResponseEntity<MinecraftWorldsResponse> getAllWorlds() {
         log.info("Entering getAllWorlds()");
-        ResponseEntity<MinecraftWorldsResponse> response = ResponseEntity.ok(new MinecraftWorldsResponse(infoService.getAllWorlds()));
+        ResponseEntity<MinecraftWorldsResponse> response = ResponseEntity.ok(minecraftService.getAllWorlds());
         log.info("Exiting getAllWorlds() with response: {}", response);
         return response;
     }
@@ -61,11 +60,8 @@ public class MinecraftServerController {
     @GetMapping("/worlds/{worldId}")
     public ResponseEntity<MinecraftWorld> getWorld(@PathVariable String worldId) {
         log.info("Entering getWorld() with worldId: {}", worldId);
-        ResponseEntity<MinecraftWorld> response = infoService.getAllWorlds().stream()
-                .filter(world -> world.getId().equals(worldId))
-                .findFirst()
-                .map(ResponseEntity::ok)
-                .orElse(ResponseEntity.notFound().build());
+        ResponseEntity<MinecraftWorld> response = minecraftService.getWorld(worldId)==null?
+                ResponseEntity.notFound().build():ResponseEntity.ok(minecraftService.getWorld(worldId));
         log.info("Exiting getWorld() with response: {}", response);
         return response;
     }
@@ -181,7 +177,7 @@ public class MinecraftServerController {
 
     @GetMapping("/worlds/{worldId}/properties")
     public ResponseEntity<Map<String, String>> getAllProperties(@PathVariable String worldId) {
-        return ResponseEntity.ok(propertiesService.getAllProperties(worldId));
+        return ResponseEntity.ok(propertiesService.getProperties(worldId).properties());
     }
 
     @PutMapping("/worlds/{worldId}/properties")
@@ -227,7 +223,7 @@ public class MinecraftServerController {
     @GetMapping("/worlds/{worldId}/players")
     public ResponseEntity getPlayers(@PathVariable String worldId) {
         try {
-            return ResponseEntity.ok(new PlayerDtoResponse(playerService.getPlayers(worldId)));
+            return ResponseEntity.ok(playerService.getPlayers(worldId));
         } catch (Exception e) {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body("Failed to get players: " + e.getMessage());
