@@ -210,13 +210,16 @@ public class MinecraftServerController {
         return ResponseEntity.ok().body("World downloaded successfully");
     }
 
-    @PostMapping("/worlds/{worldId}/sendCommand")
-    public ResponseEntity sendCommand(@PathVariable String worldId, @RequestBody Map<String, String> command) {
-        try {
-            rconClientService.sendCommand(command.get("command"));
-        } catch (ExecutionException | InterruptedException e) {
-            throw new RuntimeException(e);
-        }
+
+    @PostMapping("/worlds/{worldId}/connectRcon")
+    public ResponseEntity connectRcon(@PathVariable String worldId) {
+        rconClientService.addRconService(worldId);
+        return ResponseEntity.ok().body("Command sent successfully");
+    }
+
+    @PostMapping("/worlds/{worldId}/disconnectRcon")
+    public ResponseEntity disconnectRcon(@PathVariable String worldId) {
+        rconClientService.removeRconService(worldId);
         return ResponseEntity.ok().body("Command sent successfully");
     }
 
@@ -224,6 +227,17 @@ public class MinecraftServerController {
     public ResponseEntity getPlayers(@PathVariable String worldId) {
         try {
             return ResponseEntity.ok(playerService.getPlayers(worldId));
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body("Failed to get players: " + e.getMessage());
+        }
+    }
+
+    @PostMapping("/worlds/{worldId}/ban/{playerName}")
+    public ResponseEntity banPlayer(@PathVariable String worldId, @PathVariable String playerName) {
+        try {
+            playerService.banPlayer(worldId, playerName, "Reason not specified");
+            return ResponseEntity.ok().build();
         } catch (Exception e) {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body("Failed to get players: " + e.getMessage());

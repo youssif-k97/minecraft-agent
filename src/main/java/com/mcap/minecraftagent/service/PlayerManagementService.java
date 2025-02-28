@@ -9,10 +9,12 @@ import com.mcap.minecraftagent.pojo.WorldConfig;
 import com.mcap.minecraftagent.pojo.WorldPlayer;
 import com.mcap.minecraftagent.repository.IPlayerRepository;
 import com.mcap.minecraftagent.repository.IWorldPlayerRepository;
+import jakarta.annotation.PostConstruct;
 import jakarta.transaction.Transactional;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.io.File;
@@ -20,6 +22,7 @@ import java.io.IOException;
 import java.nio.file.FileSystems;
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 
 @Slf4j
 @Service
@@ -42,7 +45,7 @@ public class PlayerManagementService {
         this.worldPlayerRepository = worldPlayerRepository;
     }
 
-    @Cacheable(value = "playerInfo", key = "#worldName")
+//    @Cacheable(value = "playerInfo", key = "#worldName")
     public PlayerDtoResponse getPlayers(String worldName) {
         log.info("Fetching player information for world: {}", worldName);
         List<PlayerDto> players = fetchPlayers(worldName);
@@ -51,14 +54,14 @@ public class PlayerManagementService {
 
     public List<PlayerDto> fetchPlayers(String worldName) {
         List<WorldPlayer> worldPlayers = worldPlayerRepository.findAllByWorldName(worldName);
-        List<String> onlinePlayers = rconClientService.getOnlinePlayers(worldName);
+        Map<String, String> onlinePlayers = rconClientService.getOnlinePlayers(worldName);
         if (worldPlayers.isEmpty()) {
             return new ArrayList<>();
         }else {
             return worldPlayers.stream()
                     .map(wp -> new PlayerDto(wp.getPlayer().getUsername(), wp.getLastLogin().toString(),
                             wp.isBanned(), wp.isOp(), wp.isBypassesPlayerLimit(), wp.getOpLevel(), wp.isWhitelisted(),
-                            onlinePlayers.contains(wp.getPlayer().getUsername())))
+                            onlinePlayers.containsKey(wp.getPlayer().getUsername())))
                     .toList();
         }
     }
@@ -72,9 +75,9 @@ public class PlayerManagementService {
     }
 
     @Transactional
-    public void banPlayer(String worldName, String playerName) {
+    public void banPlayer(String worldName, String playerName, String reason) {
         try {
-            rconClientService.sendCommand("ban " + playerName);
+            rconClientService.banPlayer(worldName, playerName, reason);
             WorldConfig config = configService.getConfig(worldName);
 
             String uuid = null;
@@ -140,18 +143,7 @@ public class PlayerManagementService {
     }
 
     @Transactional
-    public void setPlayerOnline(String worldName, String line) {
-        String username = null;
-        if (line != null && line.contains("joined the game")) {
-            int infoIndex = line.lastIndexOf("]: ");
-            if (infoIndex >= 0) {
-                String message = line.substring(infoIndex + 3);
-                int joinedIndex = message.indexOf(" joined the game");
-                if (joinedIndex > 0) {
-                    username = message.substring(0, joinedIndex);
-                }
-            }
-        }
+    public void setPlayerOnline(String worldName, String username) {
         if (username != null) {
             try {
                 String uuid = findUuidFromUsercache(worldName, username);
@@ -205,36 +197,39 @@ public class PlayerManagementService {
             // Update last login time
             worldPlayer.setLastLogin(LocalDateTime.now());
         } else {
-            // Check if player exists in the database by UUID
-            Player player = playerRepository.findById(uuid).orElse(null);
+            addWorldPlayer(worldName, uuid, username);
+        }
+    }
 
-            if (player != null) {
-                if (!player.getUsername().equals(username)) {
-                    List<String> prevUsernames = player.getPrevUsernames();
-                    if (prevUsernames == null) {
-                        player.setPrevUsernames(new ArrayList<>());
-                    }
-                    if (!prevUsernames.contains(player.getUsername())) {
-                        prevUsernames.add(player.getUsername());
-                        player.setPrevUsernames(prevUsernames);
-                    }
-                    player.setUsername(username);
-                    player = playerRepository.save(player);
+    private void addWorldPlayer(String worldName, String uuid, String username) {
+        // Check if player exists in the database by UUID
+        Player player = playerRepository.findById(uuid).orElse(null);
+
+        if (player != null) {
+            if (!player.getUsername().equals(username)) {
+                List<String> prevUsernames = player.getPrevUsernames();
+                if (prevUsernames == null) {
+                    player.setPrevUsernames(new ArrayList<>());
                 }
-            } else {
-                player = new Player();
-                player.setUuid(uuid);
+                if (!prevUsernames.contains(player.getUsername())) {
+                    prevUsernames.add(player.getUsername());
+                    player.setPrevUsernames(prevUsernames);
+                }
                 player.setUsername(username);
-                player.setPrevUsernames(new ArrayList<>());
                 player = playerRepository.save(player);
             }
-
-            createWorldPlayer(worldName, player, false);
-
-            log.info("Created new world-player relationship for {} ({}) in world {}",
-                    username, uuid, worldName);
-
+        } else {
+            player = new Player();
+            player.setUuid(uuid);
+            player.setUsername(username);
+            player.setPrevUsernames(new ArrayList<>());
+            player = playerRepository.save(player);
         }
+
+        createWorldPlayer(worldName, player, false);
+
+        log.info("Created new world-player relationship for {} ({}) in world {}",
+                username, uuid, worldName);
     }
 
     private void createWorldPlayer(String worldName, Player player, Boolean isBanned) {
@@ -252,6 +247,33 @@ public class PlayerManagementService {
     @CacheEvict(value = "playerInfo", key = "#worldName")
     public void evictPlayerCache(String worldName) {
         log.info("Evicting player cache for world: {}", worldName);
+    }
+
+    @Scheduled(fixedRate = 1, timeUnit = TimeUnit.DAYS)
+    @PostConstruct
+    public void syncUserCache(){
+        log.info("Syncing usercache.json files");
+        File baseDir = new File(this.baseDir);
+        if (baseDir.exists() && baseDir.isDirectory()) {
+            File[] worldDirs = baseDir.listFiles(File::isDirectory);
+            if (worldDirs != null) {
+                for (File worldDir : worldDirs) {
+                    File usercacheFile = new File(worldDir.getAbsolutePath() + FileSystems.getDefault().getSeparator() + "usercache.json");
+                    if (usercacheFile.exists()) {
+                        try {
+                            List<UsercacheEntry> usercache = objectMapper.readValue(usercacheFile,
+                                    new TypeReference<List<UsercacheEntry>>() {});
+
+                            for (UsercacheEntry entry : usercache) {
+                                updatePlayerInfo(worldDir.getName(), entry.uuid, entry.name);
+                            }
+                        } catch (IOException e) {
+                            log.error("Failed to sync usercache for world: {}", worldDir.getName(), e);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     private static class UsercacheEntry {

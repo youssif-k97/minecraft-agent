@@ -2,6 +2,7 @@ package com.mcap.minecraftagent.service;
 
 import com.mcap.minecraftagent.config.MinecraftLogHandler;
 import com.mcap.minecraftagent.pojo.WorldConfig;
+import com.mcap.minecraftagent.util.LogTailer;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.Getter;
@@ -32,18 +33,20 @@ public class ServerProcessManager {
     private final Map<String, Process> activeProcesses = new ConcurrentHashMap<>();
     @Getter
     private final Map<String, Integer> runningServers = new ConcurrentHashMap<>();
+    private final Map<String, LogTailer> logTailers = new ConcurrentHashMap<>();
     private final ConfigurationService configService;
     private final MinecraftLogHandler logHandler;
     private final PlayerManagementService playerManagementService;
+    private final RconClientService rconClientService;
     private final String baseDir;
 
     public ServerProcessManager(
-            ConfigurationService configService,
-            MinecraftLogHandler logHandler,
-            PlayerManagementService playerManagementService) {
+            ConfigurationService configService, MinecraftLogHandler logHandler,
+            PlayerManagementService playerManagementService, RconClientService rconClientService) {
         this.configService = configService;
         this.logHandler = logHandler;
         this.playerManagementService = playerManagementService;
+        this.rconClientService = rconClientService;
         this.baseDir = System.getProperty("user.home") + System.getProperty("file.separator") + "minecraft-servers" + System.getProperty("file.separator");
     }
 
@@ -143,22 +146,31 @@ public class ServerProcessManager {
                 .redirectErrorStream(true);
         Process process = pb.start();
 
-        CompletableFuture<Void> serverStartedFuture = new CompletableFuture<>();
-        Thread logThread = new Thread(() -> {
-            try {
-                startLogCapture(process, worldName, serverStartedFuture);
-            } catch (Exception e) {
-                log.error("Error in log capture thread for world {}", worldName, e);
-                serverStartedFuture.completeExceptionally(e);
-            } finally {
-                config.setRunning(false);
-                configService.saveConfig(config);
-            }
-        }, "LogCapture-" + worldName);
-        logThread.setDaemon(true);
-        logThread.start();
-
-        verifyServerStart(process, worldName, serverStartedFuture);
+//        CompletableFuture<Void> serverStartedFuture = new CompletableFuture<>();
+//        Thread logThread = new Thread(() -> {
+//            try {
+//                startLogCapture(process, worldName, serverStartedFuture);
+//            } catch (Exception e) {
+//                log.error("Error in log capture thread for world {}", worldName, e);
+//                serverStartedFuture.completeExceptionally(e);
+//            } finally {
+//                config.setRunning(false);
+//                configService.saveConfig(config);
+//            }
+//        }, "LogCapture-" + worldName);
+//        logThread.setDaemon(true);
+//        logThread.start();
+//
+//        verifyServerStart(process, worldName, serverStartedFuture);
+        LogTailer logTailer = new LogTailer(
+                worldName,
+                baseDir,
+                logHandler,
+                playerManagementService,
+                configService);
+        logTailer.start();
+        logTailers.put(worldName, logTailer);
+        verifyServerStart(worldName, process, logTailer);
         registerProcess(worldName, process);
         log.info("Server process registered for world: {}", worldName);
         configService.updateServerStatus(worldName, true);
@@ -166,33 +178,14 @@ public class ServerProcessManager {
         return process;
     }
 
-    private void startLogCapture(Process process, String worldName, CompletableFuture<Void> serverStartedFuture) {
-        new BufferedReader(new InputStreamReader(process.getInputStream())).lines()
-                .forEach(line -> {
-                    log.info("[{}] {}", worldName, line);
-                    logHandler.broadcastLog(worldName, line);
-                    if (line.contains("Done") || line.contains("For help, type \"help\"")) {
-                        serverStartedFuture.complete(null);
-                    }
-                    if (line.contains("Stopping server") || line.contains("Server thread/ERROR")) {
-                        serverStartedFuture.completeExceptionally(
-                                new RuntimeException("Server error detected: " + line));
-                    }
-                    if (line.contains("joined the game")){
-                        try {
-                            playerManagementService.setPlayerOnline(worldName, line);
-                        } catch (Exception e) {
-                            log.error("Failed to set player online", e);
-                        }
-                    }
-                });
-    }
-
-    private void verifyServerStart(Process process, String worldName, CompletableFuture<Void> serverStartedFuture) throws IOException {
-        long timeout = 120000; // 2 minutes timeout
+    private void verifyServerStart(String worldName, Process process, LogTailer logTailer) {
+        log.info("Server process started for world: {} with PID {}", worldName, process.pid());
         try {
-            serverStartedFuture.get(timeout, TimeUnit.MILLISECONDS);
-        } catch (TimeoutException e) {
+            log.info("Waiting for server {} to complete initialization...", worldName);
+            CompletableFuture<Void> serverReadyFuture = logTailer.getServerReadyFuture();
+            serverReadyFuture.get(120, TimeUnit.SECONDS);
+            log.info("Server {} is now fully initialized and ready", worldName);
+        }catch (TimeoutException e) {
             handleFailedStart(process, worldName, "Server startup timed out");
         } catch (ExecutionException e) {
             handleFailedStart(process, worldName, "Server error: " + e.getCause().getMessage());
@@ -200,12 +193,10 @@ public class ServerProcessManager {
             Thread.currentThread().interrupt();
             handleFailedStart(process, worldName, "Startup verification interrupted");
         }
-        if (!process.isAlive()) {
-            handleFailedStart(process, worldName, "Server process terminated unexpectedly");
-        }
     }
 
-    private void handleFailedStart(Process process, String worldName, String errorMessage) throws IOException {
+
+    private void handleFailedStart(Process process, String worldName, String errorMessage) {
         removeProcess(worldName);
         process.destroyForcibly();
         log.error("Server startup failed for {}: {}", worldName, errorMessage);
@@ -214,18 +205,27 @@ public class ServerProcessManager {
     }
 
     public boolean stopServer(String worldName) {
-        Process serverProcess = activeProcesses.get(worldName);
-        if (serverProcess == null) {
-            log.warn("No process found for world: {}", worldName);
+        return  stopServerViaRcon(worldName)
+                || stopServerViaProcess(worldName, activeProcesses.get(worldName))
+                || stopServerViaProcessHandle(worldName, runningServers.get(worldName));
+    }
+
+    private boolean stopServerViaRcon(String worldName) {
+        log.info("Attempting to stop server {} via RCON", worldName);
+        boolean stopped = rconClientService.stopServer(worldName);
+        if (stopped) {
+            removeProcess(worldName);
+            configService.updateServerStatus(worldName, false);
+            log.info("Server {} stopped via RCON", worldName);
+        }
+        return stopped;
+    }
+
+    private boolean stopServerViaProcess(String worldName, Process serverProcess) {
+        if (serverProcess == null || !serverProcess.isAlive()) {
+            log.warn("Server Process for world {} not running", worldName);
             return false;
         }
-
-        if (!serverProcess.isAlive()) {
-            log.info("Process for world {} is already stopped", worldName);
-            removeProcess(worldName);
-            return true;
-        }
-
         try {
             log.info("Attempting to stop server {} gracefully...", worldName);
 
@@ -241,33 +241,38 @@ public class ServerProcessManager {
                 configService.updateServerStatus(worldName, false);
                 return true;
             }
-
-            log.warn("Server {} didn't stop gracefully, attempting destroy()", worldName);
-            serverProcess.destroy();
-
-            if (serverProcess.waitFor(10, TimeUnit.SECONDS)) {
-                log.info("Server {} stopped after destroy()", worldName);
-                removeProcess(worldName);
-                configService.updateServerStatus(worldName, false);
-                return true;
-            }
-
-            log.warn("Server {} still running, using destroyForcibly()", worldName);
-            serverProcess.destroyForcibly();
-            boolean terminated = serverProcess.waitFor(5, TimeUnit.SECONDS);
-            removeProcess(worldName);
-            configService.updateServerStatus(worldName, false);
-
-            return terminated;
-
         } catch (IOException | InterruptedException e) {
-            log.error("Error stopping server {}", worldName, e);
-            Thread.currentThread().interrupt();
-            serverProcess.destroyForcibly();
-            removeProcess(worldName);
-            configService.updateServerStatus(worldName, false);
+            log.error("Error stopping server {} via process", worldName, e);
             return false;
         }
+        return false;
+    }
+
+    private boolean stopServerViaProcessHandle(String worldName, int pid){
+        log.info("Falling back to process termination for world {}", worldName);
+
+        ProcessHandle serverProcess = ProcessHandle.of(pid).orElse(null);
+        if (serverProcess == null || !serverProcess.isAlive()) {
+            log.info("Process for world {} is not running", worldName);
+            removeProcess(worldName);
+            configService.updateServerStatus(worldName, false);
+            return true;
+        }
+
+        log.info("Attempting to terminate process for world {}", worldName);
+        serverProcess.destroy();
+
+        if (serverProcess.onExit().isDone()) {
+            log.info("Server {} stopped after destroy() via process handle", worldName);
+            removeProcess(worldName);
+            configService.updateServerStatus(worldName, false);
+            return true;
+        }
+
+        log.warn("Server {} still running, using destroyForcibly() via process handle", worldName);
+        removeProcess(worldName);
+        configService.updateServerStatus(worldName, false);
+        return serverProcess.destroyForcibly();
     }
 
     @PreDestroy

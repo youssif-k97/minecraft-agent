@@ -29,7 +29,7 @@ public class MinecraftLogHandler extends TextWebSocketHandler {
         worldSessions.getOrDefault(worldName, new CopyOnWriteArrayList<>()).remove(session);
     }
 
-    public void broadcastLog(String worldName, String logMessage) {
+    public synchronized void broadcastLog(String worldName, String logMessage) {
         List<WebSocketSession> sessions = worldSessions.getOrDefault(worldName, new CopyOnWriteArrayList<>());
         sessions.removeIf(session -> !session.isOpen());
 
@@ -39,7 +39,6 @@ public class MinecraftLogHandler extends TextWebSocketHandler {
                 session.sendMessage(message);
             } catch (Exception e) {
                 log.error("Failed to send log message to session: {}", session.getId(), e);
-                // Handle exception
             }
         });
     }
