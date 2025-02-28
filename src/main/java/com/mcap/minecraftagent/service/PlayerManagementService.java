@@ -146,12 +146,13 @@ public class PlayerManagementService {
     public void setPlayerOnline(String worldName, String username) {
         if (username != null) {
             try {
-                String uuid = findUuidFromUsercache(worldName, username);
-                if (uuid != null) {
+                String uuid = findPlayerUuidByUsername(username);
+                if (uuid == null)
+                    uuid = findUuidFromUsercache(worldName, username);
+                if (uuid != null)
                     updatePlayerInfo(worldName, uuid, username);
-                } else {
+                else
                     log.warn("Could not find UUID for player {} in usercache.json", username);
-                }
             } catch (IOException e) {
                 log.error("Failed to update player info", e);
             }
@@ -274,6 +275,24 @@ public class PlayerManagementService {
                 }
             }
         }
+    }
+
+    public String findPlayerUuidByUsername(String username) {
+        if (username == null || username.trim().isEmpty()) {
+            return null;
+        }
+
+        Player player = playerRepository.findByUsername(username);
+        if (player != null) {
+            return player.getUuid();
+        }
+
+        player = playerRepository.findByPrevUsername(username);
+        if (player != null) {
+            return player.getUuid();
+        }
+
+        return null;
     }
 
     private static class UsercacheEntry {

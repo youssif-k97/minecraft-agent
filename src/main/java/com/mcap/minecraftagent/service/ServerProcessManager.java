@@ -146,22 +146,6 @@ public class ServerProcessManager {
                 .redirectErrorStream(true);
         Process process = pb.start();
 
-//        CompletableFuture<Void> serverStartedFuture = new CompletableFuture<>();
-//        Thread logThread = new Thread(() -> {
-//            try {
-//                startLogCapture(process, worldName, serverStartedFuture);
-//            } catch (Exception e) {
-//                log.error("Error in log capture thread for world {}", worldName, e);
-//                serverStartedFuture.completeExceptionally(e);
-//            } finally {
-//                config.setRunning(false);
-//                configService.saveConfig(config);
-//            }
-//        }, "LogCapture-" + worldName);
-//        logThread.setDaemon(true);
-//        logThread.start();
-//
-//        verifyServerStart(process, worldName, serverStartedFuture);
         LogTailer logTailer = new LogTailer(
                 worldName,
                 baseDir,
