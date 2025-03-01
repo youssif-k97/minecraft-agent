@@ -261,9 +261,9 @@ public class ServerProcessManager {
 
     @PreDestroy
     public void shutdownAllServers() {
-        log.info("Initiating shutdown of all Minecraft servers...");
+        log.info("Initiating shutdown of all Minecraft servers... Active servers: {}", runningServers.size());
 
-        activeProcesses.keySet().forEach(this::stopServer);
+        runningServers.keySet().forEach(this::stopServer);
 
         log.info("All Minecraft servers have been shut down");
     }

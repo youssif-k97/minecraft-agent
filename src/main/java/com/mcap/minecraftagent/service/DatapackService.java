@@ -2,6 +2,8 @@ package com.mcap.minecraftagent.service;
 
 import com.mcap.minecraftagent.dto.Datapack;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 
 import java.io.BufferedInputStream;
@@ -43,7 +45,7 @@ public class DatapackService {
                 out.write(buffer, 0, bytesRead);
             }
         }
-
+        evictCache(worldId);
         return targetPath;
     }
     public void removeDatapack(String worldId, String datapackName) {
@@ -66,7 +68,9 @@ public class DatapackService {
                 }
             }
         }
+        evictCache(worldId);
     }
+    @Cacheable(value = "datapacks", key = "#worldId")
     public List<Datapack> getDatapacks(String worldId) {
         String worldDatapacksDir = baseDir + worldId + System.getProperty("file.separator") + "datapacks";
         List<Datapack> datapacks = new ArrayList<>();
@@ -84,6 +88,11 @@ public class DatapackService {
         }
         log.info("Found {} datapacks in directory: {}", datapacks.size(), worldDatapacksDir);
         return datapacks;
+    }
+
+    @CacheEvict(value = "datapacks", key = "#worldId")
+    public void evictCache(String worldId) {
+        log.info("Evicting cache for world: {}", worldId);
     }
 
 }

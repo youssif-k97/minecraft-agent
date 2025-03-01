@@ -15,6 +15,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Properties;
 
 @Slf4j
@@ -92,8 +93,8 @@ public class ServerPropertiesService {
         }
     }
 
-    @CacheEvict(value = "propertiesInfo", key = "#worldName")
     public void evictPropertiesCache(String worldName) {
         log.info("Evicting properties cache for world: {}", worldName);
+        Objects.requireNonNull(cacheManager.getCache("propertiesInfo")).evict(worldName);
     }
 }

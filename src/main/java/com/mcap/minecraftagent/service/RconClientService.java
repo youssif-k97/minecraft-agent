@@ -3,20 +3,12 @@ package com.mcap.minecraftagent.service;
 import com.mcap.minecraftagent.pojo.WorldConfig;
 import io.graversen.minecraft.rcon.MinecraftRcon;
 import io.graversen.minecraft.rcon.RconResponse;
-import io.graversen.minecraft.rcon.commands.BanCommand;
-import io.graversen.minecraft.rcon.commands.PlayerListCommand;
-import io.graversen.minecraft.rcon.commands.SayCommand;
-import io.graversen.minecraft.rcon.commands.StopCommand;
-import io.graversen.minecraft.rcon.commands.tellraw.TellRawCommand;
-import io.graversen.minecraft.rcon.commands.tellraw.TellRawCommandBuilder;
-import io.graversen.minecraft.rcon.commands.tellraw.TellRawCompositeCommand;
+import io.graversen.minecraft.rcon.commands.*;
 import io.graversen.minecraft.rcon.query.playerlist.PlayerNamesMapper;
 import io.graversen.minecraft.rcon.query.playerlist.PlayerUuidsMapper;
 import io.graversen.minecraft.rcon.service.ConnectOptions;
 import io.graversen.minecraft.rcon.service.MinecraftRconService;
 import io.graversen.minecraft.rcon.service.RconDetails;
-import io.graversen.minecraft.rcon.util.Colors;
-import io.graversen.minecraft.rcon.util.Selectors;
 import io.graversen.minecraft.rcon.util.Target;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
@@ -125,6 +117,25 @@ public class RconClientService {
             final MinecraftRcon minecraftRcon = minecraftRconService.minecraftRcon().orElseThrow(IllegalStateException::new);
             Future<RconResponse> response = minecraftRcon.sendAsync(new BanCommand(Target.player(playerName), reason));
             return response.get().getResponseString().contains("Banned "+playerName);
+        } catch (RuntimeException e) {
+            log.error("Unexpected error during RCON operation", e);
+        } catch (ExecutionException e) {
+            log.error("Error while banning player", e);
+        } catch (InterruptedException e) {
+            log.error("Interrupted while banning player", e);
+        }
+        return false;
+    }
+
+    public boolean kickPlayer(String worldName, String playerName, String reason){
+        MinecraftRconService minecraftRconService = rconServiceMap.get(worldName);
+        if (minecraftRconService == null) {
+            minecraftRconService = Objects.requireNonNull(addRconService(worldName));
+        }
+        try {
+            final MinecraftRcon minecraftRcon = minecraftRconService.minecraftRcon().orElseThrow(IllegalStateException::new);
+            Future<RconResponse> response = minecraftRcon.sendAsync(new KickCommand(Target.player(playerName), reason));
+            return response.get().getResponseString().contains("Kicked "+playerName);
         } catch (RuntimeException e) {
             log.error("Unexpected error during RCON operation", e);
         } catch (ExecutionException e) {

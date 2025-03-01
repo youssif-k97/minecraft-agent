@@ -1,6 +1,6 @@
 package com.mcap.minecraftagent.dto;
 
-public record PlayerDto(
+public record BanKickPlayerDto(
         String uuid,
         String name,
         String lastLogin,
@@ -9,5 +9,6 @@ public record PlayerDto(
         boolean bypassesPlayerLimit,
         int opLevel,
         boolean isWhitelisted,
-        boolean isOnline
+        boolean isOnline,
+        String reason
 ) {}

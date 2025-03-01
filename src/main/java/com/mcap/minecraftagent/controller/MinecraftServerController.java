@@ -233,14 +233,14 @@ public class MinecraftServerController {
         }
     }
 
-    @PostMapping("/worlds/{worldId}/ban/{playerName}")
-    public ResponseEntity banPlayer(@PathVariable String worldId, @PathVariable String playerName) {
+    @PostMapping("/worlds/{worldId}/banPlayer")
+    public ResponseEntity banPlayer(@PathVariable String worldId, @RequestBody BanKickPlayerDto playerDto) {
         try {
-            playerService.banPlayer(worldId, playerName, "Reason not specified");
+            playerService.banPlayer(worldId, playerDto );
             return ResponseEntity.ok().build();
         } catch (Exception e) {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body("Failed to get players: " + e.getMessage());
+                    .body("Failed to ban players: " + e.getMessage());
         }
     }
 }
