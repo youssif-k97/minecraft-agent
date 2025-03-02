@@ -55,15 +55,21 @@ public class PlayerManagementService {
 
     public List<PlayerDto> fetchPlayers(String worldName) {
         List<WorldPlayer> worldPlayers = worldPlayerRepository.findAllByWorldName(worldName);
-        Map<String, String> onlinePlayers = rconClientService.getOnlinePlayers(worldName);
+        Map<String, String> onlinePlayers = new HashMap<>();
+        try {
+            onlinePlayers = rconClientService.getOnlinePlayers(worldName);
+        } catch (Exception e) {
+            log.error("Failed to get online players", e);
+        }
         if (worldPlayers.isEmpty()) {
             return new ArrayList<>();
         }else {
+            Map<String, String> finalOnlinePlayers = onlinePlayers;
             return worldPlayers.stream()
                     .map(wp -> new PlayerDto(wp.getPlayer().getUuid(),wp.getPlayer().getUsername(),
                             wp.getLastLogin().toString(), wp.isBanned(), wp.isOp(), wp.isBypassesPlayerLimit(),
                             wp.getOpLevel(), wp.isWhitelisted(),
-                            onlinePlayers.containsKey(wp.getPlayer().getUsername())))
+                            finalOnlinePlayers.containsKey(wp.getPlayer().getUsername())))
                     .toList();
         }
     }

@@ -1,19 +1,16 @@
 package com.mcap.minecraftagent.util;
 
-import java.io.File;
-import java.io.RandomAccessFile;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.nio.file.StandardWatchEventKinds;
-import java.nio.file.WatchEvent;
-import java.nio.file.WatchKey;
-import java.nio.file.WatchService;
 import java.time.LocalDateTime;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -24,6 +21,10 @@ import com.mcap.minecraftagent.service.PlayerManagementService;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 
+/**
+ * An improved implementation of the log file monitor for Minecraft servers.
+ * Uses polling instead of WatchService for better cross-platform reliability.
+ */
 @Slf4j
 public class LogTailer {
     private final String worldName;
@@ -31,8 +32,10 @@ public class LogTailer {
     private final MinecraftLogHandler logHandler;
     private final PlayerManagementService playerManagementService;
     private final ConfigurationService configService;
-    private final ExecutorService executor = Executors.newSingleThreadExecutor();
-    private volatile boolean running = true;
+    private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+    private volatile boolean running = false;
+    private final AtomicLong lastPosition = new AtomicLong(0);
+    private final long POLLING_INTERVAL_MS = 500; // Check every 500ms
 
     @Getter
     private CompletableFuture<Void> serverReadyFuture = new CompletableFuture<>();
@@ -62,122 +65,130 @@ public class LogTailer {
         this.configService = configService;
     }
 
+    /**
+     * Starts the log monitoring process.
+     */
     public void start() {
-        // Reset the future before starting
+        if (running) {
+            log.warn("LogTailer for world {} is already running", worldName);
+            return;
+        }
+
+        // Reset the future and position
         serverReadyFuture = new CompletableFuture<>();
-        executor.submit(this::tailLog);
+        lastPosition.set(0);
+        running = true;
+
+        log.info("Starting log monitoring for world {}", worldName);
+
+        // Create parent directories if needed
+        try {
+            Files.createDirectories(logFile.getParent());
+        } catch (IOException e) {
+            log.error("Failed to create log directory for world {}: {}", worldName, e.getMessage(), e);
+        }
+
+        // Initial check for existing content
+        scheduler.schedule(this::initialCheck, 0, TimeUnit.MILLISECONDS);
+
+        // Schedule regular polling
+        scheduler.scheduleAtFixedRate(this::pollForChanges, POLLING_INTERVAL_MS, POLLING_INTERVAL_MS, TimeUnit.MILLISECONDS);
     }
 
+    /**
+     * Stops the log monitoring process.
+     */
     public void stop() {
         running = false;
-        executor.shutdownNow();
+        scheduler.shutdownNow();
+        log.info("Stopped log monitoring for world {}", worldName);
     }
 
-    private void tailLog() {
-        File file = logFile.toFile();
+    /**
+     * Performs the initial check of the log file.
+     */
+    private void initialCheck() {
+        try {
+            if (Files.exists(logFile)) {
+                log.info("Processing existing log content for world {}", worldName);
+                // Stream existing content to the log handler
+                Files.lines(logFile, StandardCharsets.UTF_8)
+                        .forEach(line -> logHandler.broadcastLog(worldName, line));
+
+                // Update position to end of file
+                lastPosition.set(Files.size(logFile));
+            } else {
+                log.info("Log file does not exist yet for world {}", worldName);
+                lastPosition.set(0);
+            }
+        } catch (IOException e) {
+            log.error("Error during initial log check for world {}: {}", worldName, e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Polls the log file for changes.
+     */
+    private void pollForChanges() {
+        if (!running) return;
 
         try {
-            if (!file.exists()) {
-                log.warn("Log file does not exist yet for world {}: {}", worldName, logFile);
-                // Create parent directories if needed
-                file.getParentFile().mkdirs();
-                // Wait for the file to be created
-                waitForFile(file);
+            // Check if file exists
+            if (!Files.exists(logFile)) {
+                if (lastPosition.get() > 0) {
+                    log.info("Log file for world {} was deleted, resetting position", worldName);
+                    lastPosition.set(0);
+                }
+                return;
             }
 
-            try (RandomAccessFile raf = new RandomAccessFile(file, "r")) {
-                // Start by sending the entire file content
-                long fileLength = file.length();
-                if (fileLength > 0) {
-                    log.info("Streaming entire log file for world {}", worldName);
-                    streamEntireFile(raf);
-                }
+            long currentSize = Files.size(logFile);
 
-                // Set file pointer to the end after streaming the entire file
-                long filePointer = file.length();
-
-                // Start watching for changes
-                try (WatchService watchService = logFile.getParent().getFileSystem().newWatchService()) {
-                    logFile.getParent().register(watchService, StandardWatchEventKinds.ENTRY_MODIFY);
-
-                    while (running) {
-                        // Check for file changes
-                        WatchKey key = watchService.poll(100, TimeUnit.MILLISECONDS);
-                        if (key != null) {
-                            for (WatchEvent<?> event : key.pollEvents()) {
-                                if (event.context().toString().equals(logFile.getFileName().toString())) {
-                                    // File changed, read new content
-                                    long length = file.length();
-                                    if (length > filePointer) {
-                                        raf.seek(filePointer);
-                                        String line;
-                                        while ((filePointer < length) && (line = raf.readLine()) != null) {
-                                            String logLine = new String(line.getBytes("ISO-8859-1"), StandardCharsets.UTF_8);
-                                            processLogLine(logLine);
-                                            filePointer = raf.getFilePointer();
-                                        }
-                                    } else if (length < filePointer) {
-                                        // File was truncated or rotated, start from the beginning
-                                        log.info("Log file for world {} was rotated or truncated, restarting from beginning", worldName);
-                                        filePointer = 0;
-                                        streamEntireFile(raf);
-                                        filePointer = raf.getFilePointer();
-                                    }
-                                }
-                            }
-                            key.reset();
-                        }
-
-                        // Check if file still exists (in case it was deleted)
-                        if (!file.exists()) {
-                            log.warn("Log file for world {} was deleted, waiting for recreation", worldName);
-                            waitForFile(file);
-                            // If file was recreated, reopen it
-                            raf.close();
-                            RandomAccessFile newRaf = new RandomAccessFile(file, "r");
-                            filePointer = 0;
-                            streamEntireFile(newRaf);
-                            filePointer = newRaf.getFilePointer();
-                        }
-                    }
-                }
+            // File was truncated or rotated
+            if (currentSize < lastPosition.get()) {
+                log.info("Log file for world {} was truncated or rotated, processing from beginning", worldName);
+                lastPosition.set(0);
             }
-        } catch (Exception e) {
-            log.error("Error tailing log file for world {}: {}", worldName, e.getMessage(), e);
-            if (running) {
-                // Attempt to restart the log tailer after a brief delay
-                try {
-                    Thread.sleep(5000);
-                    tailLog(); // Recursive call to restart monitoring
-                } catch (InterruptedException ie) {
-                    Thread.currentThread().interrupt();
+
+            // There's new content to read
+            if (currentSize > lastPosition.get()) {
+                try (var lines = Files.lines(logFile, StandardCharsets.UTF_8)) {
+                    lines.skip(lastPosition.get() > 0 ? getLineCount(lastPosition.get()) : 0)
+                            .forEach(this::processLogLine);
                 }
+                lastPosition.set(currentSize);
             }
+        } catch (IOException e) {
+            // Log but don't throw - we want to keep trying
+            log.error("Error polling log file for world {}: {}", worldName, e.getMessage(), e);
         }
     }
 
-    private void waitForFile(File file) throws InterruptedException {
-        int attempts = 0;
-        while (!file.exists() && running && attempts < 60) { // Wait up to 1 minute
-            Thread.sleep(1000);
-            attempts++;
-        }
-        if (!file.exists()) {
-            throw new RuntimeException("Log file was not created after waiting: " + file.getAbsolutePath());
+    /**
+     * Helper method to get the line count up to a certain position.
+     * This is an approximate method and assumes line endings are consistent.
+     */
+    private long getLineCount(long position) throws IOException {
+        try (var lines = Files.lines(logFile, StandardCharsets.UTF_8)) {
+            long count = 0;
+            long bytesRead = 0;
+
+            for (var line : (Iterable<String>) lines::iterator) {
+                bytesRead += line.getBytes(StandardCharsets.UTF_8).length + System.lineSeparator().length();
+                count++;
+                if (bytesRead >= position) break;
+            }
+
+            return count;
         }
     }
 
-    private void streamEntireFile(RandomAccessFile raf) throws Exception {
-        raf.seek(0);
-        String line;
-        while ((line = raf.readLine()) != null) {
-            String logLine = new String(line.getBytes("ISO-8859-1"), StandardCharsets.UTF_8);
-            // Send to log handler but don't process events for historical logs
-            logHandler.broadcastLog(worldName, logLine);
-        }
-    }
-
+    /**
+     * Processes a single log line for events.
+     */
     private void processLogLine(String logLine) {
+        if (!running) return;
+
         // Broadcast the log line first
         logHandler.broadcastLog(worldName, logLine);
 
