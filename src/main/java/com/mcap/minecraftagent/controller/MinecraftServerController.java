@@ -243,4 +243,15 @@ public class MinecraftServerController {
                     .body("Failed to ban players: " + e.getMessage());
         }
     }
+
+    @PostMapping("/worlds/{worldId}/kickPlayer")
+    public ResponseEntity kickPlayer(@PathVariable String worldId, @RequestBody BanKickPlayerDto playerDto) {
+        try {
+            playerService.kickPlayer(worldId, playerDto);
+            return ResponseEntity.ok().build();
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body("Failed to kick players: " + e.getMessage());
+        }
+    }
 }

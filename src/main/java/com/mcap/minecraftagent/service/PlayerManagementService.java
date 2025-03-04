@@ -106,7 +106,7 @@ public class PlayerManagementService {
             try {
                 Player player = findPlayerByUsername(username);
                 if (player == null){
-                    Player createdPlayer = createPlayer(username, findUuidFromUsercache(worldName, username));
+                    Player createdPlayer = createPlayer(findUuidFromUsercache(worldName, username), username);
                     createWorldPlayer(worldName, createdPlayer, false, false, false,
                             false, 0, LocalDateTime.now());
                 } else {
@@ -254,6 +254,44 @@ public class PlayerManagementService {
         }
 
         return null;
+    }
+
+    @Transactional
+    public void updatePlayerWithUuid(String worldName, String username, String uuid) {
+        if (username == null || uuid == null) {
+            log.warn("Cannot update player with null username or UUID");
+            return;
+        }
+        
+        try {
+            // Check if player exists by UUID
+            Player existingPlayer = playerRepository.findById(uuid).orElse(null);
+            
+            if (existingPlayer != null) {
+                // Player exists, update username if needed
+                existingPlayer = updatePlayerUsernameHistory(username, existingPlayer);
+                
+                // Check if player is associated with this world
+                WorldPlayer existingRelationship = worldPlayerRepository.findByWorldNameAndPlayerUuid(worldName, uuid).orElse(null);
+                if (existingRelationship == null) {
+                    // Create relationship if it doesn't exist
+                    createWorldPlayer(worldName, existingPlayer, false, false, false,
+                            false, 0, LocalDateTime.now());
+                }
+            } else {
+                // Player doesn't exist, create new player with UUID
+                Player newPlayer = createPlayer(uuid, username);
+                createWorldPlayer(worldName, newPlayer, false, false, false,
+                        false, 0, LocalDateTime.now());
+            }
+            
+            // Evict cache to ensure fresh data
+            evictPlayerCache(worldName);
+            
+            log.info("Updated player {} with UUID {} in world {}", username, uuid, worldName);
+        } catch (Exception e) {
+            log.error("Failed to update player with UUID: {}", username, e);
+        }
     }
 
     private static class UsercacheEntry {

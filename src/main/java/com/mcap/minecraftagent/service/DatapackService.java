@@ -2,8 +2,10 @@ package com.mcap.minecraftagent.service;
 
 import com.mcap.minecraftagent.dto.Datapack;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.cache.CacheManager;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
+import org.springframework.cache.concurrent.ConcurrentMapCacheManager;
 import org.springframework.stereotype.Service;
 
 import java.io.BufferedInputStream;
@@ -24,6 +26,11 @@ public class DatapackService {
     private static final int BUFFER_SIZE = 8192;
 
     private final String baseDir = System.getProperty("user.home") + System.getProperty("file.separator") + "minecraft-servers" + System.getProperty("file.separator");
+    private CacheManager cacheManager;
+    public DatapackService(CacheManager cacheManager) {
+        this.cacheManager = cacheManager;
+    }
+    
 
     public Path downloadDatapack(String worldId, String datapackName, String datapackUrl) throws IOException {
         String worldDatapacksDir = baseDir + worldId + System.getProperty("file.separator") + "datapacks";
@@ -90,9 +97,9 @@ public class DatapackService {
         return datapacks;
     }
 
-    @CacheEvict(value = "datapacks", key = "#worldId")
     public void evictCache(String worldId) {
         log.info("Evicting cache for world: {}", worldId);
+        cacheManager.getCache("datapacks").evict(worldId);
     }
 
 }

@@ -21,10 +21,6 @@ import com.mcap.minecraftagent.service.PlayerManagementService;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 
-/**
- * An improved implementation of the log file monitor for Minecraft servers.
- * Uses polling instead of WatchService for better cross-platform reliability.
- */
 @Slf4j
 public class LogTailer {
     private final String worldName;
@@ -51,6 +47,9 @@ public class LogTailer {
 
     // Pattern for server errors
     private static final Pattern SERVER_ERROR_PATTERN = Pattern.compile("ERROR");
+
+    // Pattern for user authenticator
+    private static final Pattern USER_AUTHENTICATOR_PATTERN = Pattern.compile("\\[User Authenticator #\\d+/INFO\\]: UUID of player (\\S+) is ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})");
 
     public LogTailer(
             String worldName,
@@ -194,6 +193,15 @@ public class LogTailer {
 
         // Then process for specific events
         try {
+            // Check for user authenticator log line (contains UUID and username)
+            Matcher userAuthMatcher = USER_AUTHENTICATOR_PATTERN.matcher(logLine);
+            if (userAuthMatcher.find()) {
+                String playerName = userAuthMatcher.group(1);
+                String playerUuid = userAuthMatcher.group(2);
+                log.info("Detected player authentication: {} with UUID {} in world {}", playerName, playerUuid, worldName);
+                playerManagementService.updatePlayerWithUuid(worldName, playerName, playerUuid);
+            }
+            
             // Check for player join
             Matcher playerJoinMatcher = PLAYER_JOIN_PATTERN.matcher(logLine);
             if (playerJoinMatcher.find()) {
