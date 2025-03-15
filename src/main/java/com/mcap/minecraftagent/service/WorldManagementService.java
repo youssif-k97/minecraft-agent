@@ -103,8 +103,9 @@ public class WorldManagementService {
         propertiesContent.append("rcon.password=").append(config.getRconPassword()).append("\n");
         
         Files.write(Paths.get(worldDir, "server.properties"), propertiesContent.toString().getBytes());
-        
         log.info("World {} created successfully", config.getWorldName());
+        startServer(config.getWorldName());
+        this.serverPropertiesService.evictPropertiesCache(config.getWorldName());
     }
 
     private String generateRconPassword() {

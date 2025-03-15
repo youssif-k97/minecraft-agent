@@ -13,6 +13,7 @@ import java.io.BufferedOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.net.URL;
+import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -33,7 +34,8 @@ public class DatapackService {
     
 
     public Path downloadDatapack(String worldId, String datapackName, String datapackUrl) throws IOException {
-        String worldDatapacksDir = baseDir + worldId + System.getProperty("file.separator") + "datapacks";
+        String worldDatapacksDir = baseDir + worldId + FileSystems.getDefault().getSeparator() + "world" +
+                FileSystems.getDefault().getSeparator() +   "datapacks";
         URL url = new URL(datapackUrl);
         Path targetPath = Paths.get(worldDatapacksDir, datapackName);
 
@@ -56,7 +58,8 @@ public class DatapackService {
         return targetPath;
     }
     public void removeDatapack(String worldId, String datapackName) {
-        String worldDatapacksDir = baseDir + worldId + System.getProperty("file.separator") + "datapacks";
+        String worldDatapacksDir = baseDir + worldId + FileSystems.getDefault().getSeparator() + "world" +
+                FileSystems.getDefault().getSeparator() +   "datapacks";
         // Loop through the datapack files in the directory and add them to the list
         File datapacksDir = new File(worldDatapacksDir);
         if (datapacksDir.exists() && datapacksDir.isDirectory()) {
@@ -79,7 +82,8 @@ public class DatapackService {
     }
     @Cacheable(value = "datapacks", key = "#worldId")
     public List<Datapack> getDatapacks(String worldId) {
-        String worldDatapacksDir = baseDir + worldId + System.getProperty("file.separator") + "datapacks";
+        String worldDatapacksDir = baseDir + worldId + FileSystems.getDefault().getSeparator() + "world" +
+                FileSystems.getDefault().getSeparator() +   "datapacks";
         List<Datapack> datapacks = new ArrayList<>();
         // Loop through the datapack files in the directory and add them to the list
         File datapacksDir = new File(worldDatapacksDir);

@@ -67,7 +67,7 @@ public class PlayerManagementService {
             Map<String, String> finalOnlinePlayers = onlinePlayers;
             return worldPlayers.stream()
                     .map(wp -> new PlayerDto(wp.getPlayer().getUuid(),wp.getPlayer().getUsername(),
-                            wp.getLastLogin().toString(), wp.isBanned(), wp.isOp(), wp.isBypassesPlayerLimit(),
+                            wp.getLastLogin() != null ? wp.getLastLogin().toString() : null, wp.isBanned(), wp.isOp(), wp.isBypassesPlayerLimit(),
                             wp.getOpLevel(), wp.isWhitelisted(),
                             finalOnlinePlayers.containsKey(wp.getPlayer().getUsername())))
                     .toList();
