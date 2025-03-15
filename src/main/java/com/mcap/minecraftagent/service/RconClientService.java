@@ -31,6 +31,27 @@ public class RconClientService {
         this.configurationService = configurationService;
     }
 
+    public String sendRawRconCommand(String worldName, String command) {
+        MinecraftRconService minecraftRconService = rconServiceMap.get(worldName);
+        if (minecraftRconService == null) {
+            minecraftRconService = Objects.requireNonNull(addRconService(worldName));
+        }
+        try {
+
+            final MinecraftRcon minecraftRcon = minecraftRconService.minecraftRcon().orElseThrow(IllegalStateException::new);
+            Future<RconResponse> rconResponse = minecraftRcon.sendAsync(() -> command);
+            return rconResponse.get().getResponseString();
+        } catch (ExecutionException e) {
+            log.error("Error while sending raw RCON command", e);
+        } catch (InterruptedException e) {
+            log.error("Interrupted while sending raw RCON command", e);
+            Thread.currentThread().interrupt(); // Preserve interrupt status
+        } catch (RuntimeException e) {
+            log.error("Unexpected error during RCON operation", e);
+        }
+        return "Error while sending raw RCON command";
+    }
+
     public void sendCommand(String command) {
 
         MinecraftRconService minecraftRconService = rconServiceMap.get("worldName");

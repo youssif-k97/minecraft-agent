@@ -92,7 +92,7 @@ public class DatapackService {
             if (files != null) {
                 for (File file : files) {
                     if (file.isFile()) {
-                        datapacks.add(new Datapack(file.getName(), "random date"));
+                        datapacks.add(new Datapack(file.getName(), String.valueOf(file.lastModified())));
                     }
                 }
             }

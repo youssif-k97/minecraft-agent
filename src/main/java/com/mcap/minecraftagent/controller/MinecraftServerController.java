@@ -254,4 +254,18 @@ public class MinecraftServerController {
                     .body("Failed to kick players: " + e.getMessage());
         }
     }
+
+    @PostMapping("/worlds/{worldId}/raw-rcon-command")
+    public ResponseEntity<String> sendRawRconCommand(@PathVariable String worldId, @RequestBody Map<String, String> command) {
+        log.info("Entering sendRawRconCommand() with worldId: {} and command: {}", worldId, command);
+        try {
+            String response = rconClientService.sendRawRconCommand(worldId, command.get("command"));
+            log.info("Exiting sendRawRconCommand() with response: {}", response);
+            return ResponseEntity.ok().body(response);
+        } catch (Exception e) {
+            log.error("Error in sendRawRconCommand(): {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body("Failed to send raw RCON command: " + e.getMessage());
+        }
+    }
 }

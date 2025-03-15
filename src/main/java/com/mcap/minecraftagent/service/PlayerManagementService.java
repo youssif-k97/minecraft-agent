@@ -56,10 +56,13 @@ public class PlayerManagementService {
     public List<PlayerDto> fetchPlayers(String worldName) {
         List<WorldPlayer> worldPlayers = worldPlayerRepository.findAllByWorldName(worldName);
         Map<String, String> onlinePlayers = new HashMap<>();
-        try {
-            onlinePlayers = rconClientService.getOnlinePlayers(worldName);
-        } catch (Exception e) {
-            log.error("Failed to get online players", e);
+        WorldConfig config = configService.getConfig(worldName);
+        if (config.isRunning()) {
+            try {
+                onlinePlayers = rconClientService.getOnlinePlayers(worldName);
+            } catch (Exception e) {
+                log.error("Failed to get online players", e);
+            }
         }
         if (worldPlayers.isEmpty()) {
             return new ArrayList<>();
