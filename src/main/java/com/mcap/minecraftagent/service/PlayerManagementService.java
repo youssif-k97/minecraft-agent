@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mcap.minecraftagent.dto.BanKickPlayerDto;
 import com.mcap.minecraftagent.dto.PlayerDto;
 import com.mcap.minecraftagent.dto.PlayerDtoResponse;
+import com.mcap.minecraftagent.dto.PlayerOpDto;
 import com.mcap.minecraftagent.pojo.Player;
 import com.mcap.minecraftagent.pojo.WorldConfig;
 import com.mcap.minecraftagent.pojo.WorldPlayer;
@@ -30,6 +31,7 @@ import java.util.concurrent.TimeUnit;
 public class PlayerManagementService {
     private final String baseDir;
     private final RconClientService rconClientService;
+    private final ServerPropertiesService serverPropertiesService;
     private final ConfigurationService configService;
     private final ObjectMapper objectMapper;
     private final IPlayerRepository playerRepository;
@@ -37,13 +39,14 @@ public class PlayerManagementService {
 
     public PlayerManagementService(RconClientService rconClientService, ConfigurationService configService,
                                    ObjectMapper objectMapper, IPlayerRepository playerRepository,
-                                   IWorldPlayerRepository worldPlayerRepository) {
+                                   IWorldPlayerRepository worldPlayerRepository, ServerPropertiesService serverPropertiesService) {
         this.baseDir = System.getProperty("user.home") + FileSystems.getDefault().getSeparator() + "minecraft-servers" + FileSystems.getDefault().getSeparator();
         this.rconClientService = rconClientService;
         this.configService = configService;
         this.objectMapper = objectMapper;
         this.playerRepository = playerRepository;
         this.worldPlayerRepository = worldPlayerRepository;
+        this.serverPropertiesService = serverPropertiesService;
     }
 
 //    @Cacheable(value = "playerInfo", key = "#worldName")
@@ -77,31 +80,259 @@ public class PlayerManagementService {
         }
     }
 
-    public void kickPlayer(String worldName, BanKickPlayerDto playerDto) {
+    public String kickPlayer(String worldName, BanKickPlayerDto playerDto) {
         try {
-            rconClientService.kickPlayer(worldName, playerDto.name(), playerDto.reason());
+            String response = rconClientService.kickPlayer(worldName, playerDto.name(), playerDto.reason());
+            if (response != null && response.contains("Kicked "+playerDto.name())) {
+                log.info("Player {} kicked from world {}", playerDto.name(), worldName);
+                return response;
+            } else {
+                log.warn("Failed to kick player: {}", playerDto.name());
+                return response;
+            }
         } catch (Exception e) {
             log.error("Failed to kick player: {}", playerDto.name(), e);
+            throw new RuntimeException("Failed to kick player: " + playerDto.name(), e);
         }
     }
 
     @Transactional
-    public void banPlayer(String worldName, BanKickPlayerDto playerDto) {
-        try {
-            rconClientService.banPlayer(worldName, playerDto.name(), playerDto.reason());
+    public String handlePlayerRawCommand(String worldName, String rawCommand) {
+        String[] commandParts = rawCommand.split(" ");
+        String playerName = commandParts[1];
+        WorldPlayer worldPlayer = worldPlayerRepository.findByWorldNameAndPlayerUsername(worldName, playerName).orElse(null);
+        if(worldPlayer == null) {
+            return "Player not found in world: " + worldName;
+        }
+        String response = null;
+        rawCommand = rawCommand.toLowerCase();
+        if(rawCommand.startsWith("ban")) {
+            String reason = String.join(" ", Arrays.copyOfRange(commandParts, 2, commandParts.length));
+            BanKickPlayerDto playerDto = new BanKickPlayerDto(worldPlayer.getPlayer().getUuid(), worldPlayer.getPlayer().getUsername(), reason);
+            response = banPlayer(worldName, playerDto);
+        } else if(rawCommand.startsWith("pardon")) {
+            response = pardonPlayer(worldName, playerName);
+        } else if(rawCommand.startsWith("kick")) {
+            String reason = String.join(" ", Arrays.copyOfRange(commandParts, 2, commandParts.length));
+            BanKickPlayerDto playerDto = new BanKickPlayerDto(worldPlayer.getPlayer().getUuid(), worldPlayer.getPlayer().getUsername(), reason);
+            response = kickPlayer(worldName, playerDto);
+        } else if(rawCommand.startsWith("op")) {
+            int defaultOpLevel = this.serverPropertiesService.getProperties(worldName).properties().get("op-permission-level") != null ?
+                    Integer.parseInt(this.serverPropertiesService.getProperties(worldName).properties().get("op-permission-level")) : 4;
+            PlayerOpDto playerDto = new PlayerOpDto(worldPlayer.getPlayer().getUuid(), worldPlayer.getPlayer().getUsername(),
+                    true, defaultOpLevel, false);
+            response = opPlayer(worldName, playerDto);
+        } else if(rawCommand.startsWith("deop")) {
+            PlayerOpDto playerDto = new PlayerOpDto(worldPlayer.getPlayer().getUuid(), worldPlayer.getPlayer().getUsername(),
+                    false, 0, false);
+            response = removeOpPlayer(worldName, playerDto);
+        }
+        return response;
+    }
 
+    @Transactional
+    public String banPlayer(String worldName, BanKickPlayerDto playerDto) {
+        try {
+            String response = rconClientService.banPlayer(worldName, playerDto.name(), playerDto.reason());
+            if (response!=null && response.contains("Banned "+playerDto.name())) {
+                log.info("Player {} banned from world {}", playerDto.name(), worldName);
+                WorldPlayer worldPlayer = worldPlayerRepository.findByWorldNameAndPlayerUuid(worldName, playerDto.uuid())
+                        .orElse(null);
+                if (worldPlayer != null) {
+                    worldPlayer.setBanned(true);
+                    worldPlayerRepository.save(worldPlayer);
+                    return response;
+                }else {
+                    throw new RuntimeException("Player not found in world: " + worldName);
+                }
+            } else {
+                log.warn("Failed to ban player: {}", playerDto.name());
+                return response;
+            }
+
+        } catch (Exception e) {
+            log.error("Failed to ban player: " + playerDto.name(), e);
+            throw new RuntimeException("Failed to ban player: " + playerDto.name(), e);
+        }
+    }
+
+    @Transactional
+    public String pardonPlayer(String worldName, String playerName){
+        try {
+            String response = rconClientService.pardonPlayer(worldName, playerName);
+            if (response != null && response.contains("Unbanned "+playerName)) {
+                log.info("Player {} pardoned from world {}", playerName, worldName);
+                WorldPlayer worldPlayer = worldPlayerRepository.findByWorldNameAndPlayerUsername(worldName, playerName)
+                        .orElse(null);
+                if (worldPlayer != null) {
+                    worldPlayer.setBanned(false);
+                    worldPlayerRepository.save(worldPlayer);
+                    return response;
+                }else {
+                    throw new RuntimeException("Player not found in world: " + worldName);
+                }
+            } else {
+                log.warn("Failed to pardon player: {}", playerName);
+                return response;
+            }
+        } catch (Exception e) {
+            log.error("Failed to pardon player: " + playerName, e);
+            throw new RuntimeException("Failed to pardon player: " + playerName, e);
+        }
+    }
+
+    @Transactional
+    public String opPlayer(String worldName, PlayerOpDto playerDto) {
+        try {
+            String response = rconClientService.opPlayer(worldName, playerDto.name());
+            if (response == null || (!response.contains("Made "+playerDto.name()+" a server operator") 
+            && !response.contains("Player opped")) && !response.contains("Nothing changed. The player already is an operator")) {
+                log.warn("Failed to op player: {}", playerDto.name());
+                return response;
+            }
+            String opLevel = serverPropertiesService.getProperties(worldName).properties().get("op-permission-level");
+            opLevel = opLevel != null ? opLevel : "4";
+            if (!String.valueOf(playerDto.level()).equals(opLevel) && playerDto.level() <= 4) {
+                setOpLevel(worldName, playerDto);
+            }
             WorldPlayer worldPlayer = worldPlayerRepository.findByWorldNameAndPlayerUuid(worldName, playerDto.uuid())
                     .orElse(null);
             if (worldPlayer != null) {
-                worldPlayer.setBanned(true);
+                worldPlayer.setOp(true);
+                if (playerDto.level() <= 4) {
+                    worldPlayer.setOpLevel(playerDto.level());
+                    worldPlayer.setBypassesPlayerLimit(playerDto.bypassesPlayerLimit());
+                }
+                worldPlayerRepository.save(worldPlayer);
+                return response;
+            }else {
+                throw new RuntimeException("Player not found in world: " + worldName);
+            }
+        } catch (Exception e) {
+            log.error("Failed to op player: {}", playerDto.name(), e);
+            throw new RuntimeException("Failed to op player: " + playerDto.name(), e);
+        }
+    }
+
+    private void setOpLevel(String worldName, PlayerOpDto playerDto) {
+        String opFilePath = baseDir + FileSystems.getDefault().getSeparator() + worldName + 
+        FileSystems.getDefault().getSeparator() + "ops.json";
+        File opFile = new File(opFilePath);
+        if (!opFile.exists()) {
+            log.warn("ops.json not found for world: {}", worldName);
+            return;
+        }
+        try {
+            List<UserOpEntry> opList = objectMapper.readValue(opFile, new TypeReference<>() {});
+            UserOpEntry opEntry = opList.stream()
+            .filter(entry -> entry.name.equals(playerDto.name()))
+            .findFirst()
+            .orElse(null);
+            if (opEntry != null) {
+                opEntry.level = playerDto.level();
+            }else {
+                opList.add(new UserOpEntry(playerDto.name(), playerDto.uuid(), playerDto.level(), playerDto.bypassesPlayerLimit()));
+            }
+            objectMapper.writeValue(opFile, opList);
+        } catch (IOException e) {
+            log.error("Failed to set op level for player: {}", playerDto.name(), e);
+        }
+    }
+
+    @Transactional
+    public String removeOpPlayer(String worldName, PlayerOpDto playerDto) {
+        try {
+            String response = rconClientService.deOpPlayer(worldName, playerDto.name());
+            if (response == null || !response.contains("Made "+playerDto.name() + " no longer a server operator")) {
+                log.warn("Failed to remove op player: {}", playerDto.name());
+                return response;
+            }
+            WorldPlayer worldPlayer = worldPlayerRepository.findByWorldNameAndPlayerUuid(worldName, playerDto.uuid())
+                    .orElse(null);
+            if (worldPlayer != null) {
+                worldPlayer.setOp(false);
+                worldPlayer.setOpLevel(0);
+                worldPlayerRepository.save(worldPlayer);
+                return response;
+            }else {
+                throw new RuntimeException("Player not found in world: " + worldName);
+            }
+        } catch (Exception e) {
+            log.error("Failed to remove op player: {}", playerDto.name(), e);
+            throw new RuntimeException("Failed to remove op player: " + playerDto.name(), e);
+        }
+    }
+
+    @Transactional
+    public void whitelistPlayer(String worldName, PlayerDto playerDto) {
+        try {
+            WorldPlayer worldPlayer = worldPlayerRepository.findByWorldNameAndPlayerUuid(worldName, playerDto.uuid())
+                    .orElse(null);
+            if (worldPlayer != null) {
+                if(playerDto.isWhitelisted()) {
+                    addPlayerToWhitelist(worldName, playerDto);
+                }else {
+                    removePlayerFromWhitelist(worldName, playerDto);
+                }
+                worldPlayer.setWhitelisted(playerDto.isWhitelisted());
                 worldPlayerRepository.save(worldPlayer);
             }else {
                 throw new RuntimeException("Player not found in world: " + worldName);
             }
         } catch (Exception e) {
-            log.error("Failed to ban player: " + playerDto.name(), e);
+            log.error("Failed to whitelist player: {}", playerDto.name(), e);
         }
     }
+
+    private void addPlayerToWhitelist(String worldName, PlayerDto playerDto) {
+        try {
+            File whitelistFile = new File(baseDir + worldName + FileSystems.getDefault().getSeparator() + "whitelist.json");
+            List<Map<String, String>> whitelist;
+            
+            if (whitelistFile.exists()) {
+                whitelist = objectMapper.readValue(whitelistFile, new TypeReference<List<Map<String, String>>>() {});
+            } else {
+                whitelist = new ArrayList<>();
+            }
+            
+            boolean playerExists = whitelist.stream()
+                    .anyMatch(entry -> entry.get("uuid") != null && entry.get("uuid").equals(playerDto.uuid()));
+            
+            if (!playerExists) {
+                Map<String, String> newEntry = new HashMap<>();
+                newEntry.put("uuid", playerDto.uuid());
+                newEntry.put("name", playerDto.name());
+                whitelist.add(newEntry);
+                objectMapper.writeValue(whitelistFile, whitelist);
+                log.info("Added player {} to whitelist for world {}", playerDto.name(), worldName);
+            } else {
+                log.info("Player {} is already in whitelist for world {}", playerDto.name(), worldName);
+            }
+            
+        } catch (IOException e) {
+            log.error("Failed to add player to whitelist file: {}", playerDto.name(), e);
+            throw new RuntimeException("Failed to add player to whitelist", e);
+        }
+    }
+
+    private void removePlayerFromWhitelist(String worldName, PlayerDto playerDto) {
+        try {
+            File whitelistFile = new File(baseDir + worldName + FileSystems.getDefault().getSeparator() + "whitelist.json");
+            List<Map<String, String>> whitelist;
+            if (whitelistFile.exists()) {
+                whitelist = objectMapper.readValue(whitelistFile, new TypeReference<List<Map<String, String>>>() {});
+            } else {
+                whitelist = new ArrayList<>();
+            }
+            whitelist.removeIf(entry -> entry.get("uuid") != null && entry.get("uuid").equals(playerDto.uuid()));
+            objectMapper.writeValue(whitelistFile, whitelist);
+            log.info("Removed player {} from whitelist for world {}", playerDto.name(), worldName);
+        } catch (IOException e) {
+            log.error("Failed to remove player from whitelist file: {}", playerDto.name(), e);
+            throw new RuntimeException("Failed to remove player from whitelist", e);
+        }
+    }
+
 
     @Transactional
     public void setPlayerOnline(String worldName, String username) {
@@ -301,5 +532,19 @@ public class PlayerManagementService {
         public String name;
         public String uuid;
         public String expiresOn;
+    }
+
+    private static class UserOpEntry {
+        public String name;
+        public String uuid;
+        public int level;
+        public boolean bypassesPlayerLimit;
+
+        public UserOpEntry(String name, String uuid, int level, boolean bypassesPlayerLimit) {
+            this.name = name;
+            this.uuid = uuid;
+            this.level = level;
+            this.bypassesPlayerLimit = bypassesPlayerLimit;
+        }
     }
 }

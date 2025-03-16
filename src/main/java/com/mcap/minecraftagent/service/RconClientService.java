@@ -31,11 +31,52 @@ public class RconClientService {
         this.configurationService = configurationService;
     }
 
-    public String sendRawRconCommand(String worldName, String command) {
+    public MinecraftRconService createOrGetRconService(String worldName) {
         MinecraftRconService minecraftRconService = rconServiceMap.get(worldName);
         if (minecraftRconService == null) {
             minecraftRconService = Objects.requireNonNull(addRconService(worldName));
         }
+        if (!minecraftRconService.isConnected()) {
+            rconServiceMap.remove(worldName);
+            throw new IllegalStateException("RCON service is not connected");
+        }
+        return minecraftRconService;
+    }
+
+    private MinecraftRconService addRconService(String worldName) {
+        WorldConfig world = this.configurationService.getConfig(worldName);
+        if (!world.isRunning())
+            return null;
+        MinecraftRconService minecraftRconService;
+        try {
+            minecraftRconService = new MinecraftRconService(
+                    new RconDetails("localhost", world.getPort()+10, world.getRconPassword()),
+                    ConnectOptions.defaults());
+
+            boolean connected = minecraftRconService.connectBlocking(Duration.ofSeconds(10));
+            if (!connected) {
+                log.error("Failed to connect to RCON server");
+                return null;
+            }
+        } catch (RuntimeException e) {
+            log.error("Unexpected error during RCON operation", e);
+            return null;
+        }
+        if (minecraftRconService.isConnected())
+            rconServiceMap.put(worldName, minecraftRconService);
+        return minecraftRconService;
+    }
+
+    public void removeRconService(String worldName) {
+        MinecraftRconService minecraftRconService = rconServiceMap.get(worldName);
+        if (minecraftRconService != null && minecraftRconService.isConnected()) {
+            minecraftRconService.disconnect();
+            rconServiceMap.remove(worldName);
+        }
+    }
+
+    public String sendRawRconCommand(String worldName, String command) {
+        MinecraftRconService minecraftRconService =createOrGetRconService(worldName);
         try {
 
             final MinecraftRcon minecraftRcon = minecraftRconService.minecraftRcon().orElseThrow(IllegalStateException::new);
@@ -52,61 +93,11 @@ public class RconClientService {
         return "Error while sending raw RCON command";
     }
 
-    public void sendCommand(String command) {
-
-        MinecraftRconService minecraftRconService = rconServiceMap.get("worldName");
-        if (minecraftRconService == null) {
-            minecraftRconService = Objects.requireNonNull(addRconService("worldName"));
-        }
-        try {
-            final MinecraftRcon minecraftRcon = minecraftRconService.minecraftRcon().orElseThrow(IllegalStateException::new);
-            minecraftRcon.sendAsync(new SayCommand(command)).get();
-        } catch (RuntimeException e) {
-            log.error("Unexpected error during RCON operation", e);
-        } catch (ExecutionException e) {
-            log.error("Error while sending command", e);
-        } catch (InterruptedException e) {
-            log.error("Interrupted while sending command", e);
-        }
-    }
-
-    public MinecraftRconService addRconService(String worldName) {
-        WorldConfig world = this.configurationService.getConfig(worldName);
-        MinecraftRconService minecraftRconService;
-        try {
-            minecraftRconService = new MinecraftRconService(
-                    new RconDetails("localhost", world.getPort()+10, world.getRconPassword()),
-                    ConnectOptions.defaults());
-
-            boolean connected = minecraftRconService.connectBlocking(Duration.ofSeconds(10));
-            if (!connected) {
-                log.error("Failed to connect to RCON server");
-                return null;
-            }
-        } catch (RuntimeException e) {
-            log.error("Unexpected error during RCON operation", e);
-            return null;
-        }
-        rconServiceMap.put(worldName, minecraftRconService);
-        return minecraftRconService;
-    }
-
-    public void removeRconService(String worldName) {
-        MinecraftRconService minecraftRconService = rconServiceMap.get(worldName);
-        if (minecraftRconService != null && minecraftRconService.isConnected()) {
-            minecraftRconService.disconnect();
-            rconServiceMap.remove(worldName);
-        }
-    }
-
     public Map<String, String> getOnlinePlayers(String worldName){
-        MinecraftRconService minecraftRconService = rconServiceMap.get(worldName);
+        MinecraftRconService minecraftRconService =createOrGetRconService(worldName);
         List<String> playerNames = new ArrayList<>();
         List<String> playerUuids = new ArrayList<>();
         Map<String, String> playerMap = new HashMap<>();
-        if (minecraftRconService == null) {
-            minecraftRconService = Objects.requireNonNull(addRconService(worldName));
-        }
         try {
 
             final MinecraftRcon minecraftRcon = minecraftRconService.minecraftRcon().orElseThrow(IllegalStateException::new);
@@ -129,15 +120,12 @@ public class RconClientService {
         return playerMap;
     }
 
-    public boolean banPlayer(String worldName, String playerName, String reason){
-        MinecraftRconService minecraftRconService = rconServiceMap.get(worldName);
-        if (minecraftRconService == null) {
-            minecraftRconService = Objects.requireNonNull(addRconService(worldName));
-        }
+    public String banPlayer(String worldName, String playerName, String reason){
+        MinecraftRconService minecraftRconService =createOrGetRconService(worldName);
         try {
             final MinecraftRcon minecraftRcon = minecraftRconService.minecraftRcon().orElseThrow(IllegalStateException::new);
             Future<RconResponse> response = minecraftRcon.sendAsync(new BanCommand(Target.player(playerName), reason));
-            return response.get().getResponseString().contains("Banned "+playerName);
+            return response.get().getResponseString();
         } catch (RuntimeException e) {
             log.error("Unexpected error during RCON operation", e);
         } catch (ExecutionException e) {
@@ -145,18 +133,31 @@ public class RconClientService {
         } catch (InterruptedException e) {
             log.error("Interrupted while banning player", e);
         }
-        return false;
+        return null;
     }
 
-    public boolean kickPlayer(String worldName, String playerName, String reason){
-        MinecraftRconService minecraftRconService = rconServiceMap.get(worldName);
-        if (minecraftRconService == null) {
-            minecraftRconService = Objects.requireNonNull(addRconService(worldName));
+    public String pardonPlayer(String worldName, String playerName){
+        MinecraftRconService minecraftRconService =createOrGetRconService(worldName);
+        try {
+            final MinecraftRcon minecraftRcon = minecraftRconService.minecraftRcon().orElseThrow(IllegalStateException::new);
+            Future<RconResponse> response = minecraftRcon.sendAsync(new PardonCommand(Target.player(playerName)));
+            return response.get().getResponseString();
+        } catch (RuntimeException e) {
+            log.error("Unexpected error during RCON operation", e);
+        } catch (ExecutionException e) {
+            log.error("Error while pardoning player", e);
+        } catch (InterruptedException e) {
+            log.error("Interrupted while pardoning player", e);
         }
+        return null;
+    }
+
+    public String kickPlayer(String worldName, String playerName, String reason){
+        MinecraftRconService minecraftRconService =createOrGetRconService(worldName);
         try {
             final MinecraftRcon minecraftRcon = minecraftRconService.minecraftRcon().orElseThrow(IllegalStateException::new);
             Future<RconResponse> response = minecraftRcon.sendAsync(new KickCommand(Target.player(playerName), reason));
-            return response.get().getResponseString().contains("Kicked "+playerName);
+            return response.get().getResponseString();
         } catch (RuntimeException e) {
             log.error("Unexpected error during RCON operation", e);
         } catch (ExecutionException e) {
@@ -164,14 +165,44 @@ public class RconClientService {
         } catch (InterruptedException e) {
             log.error("Interrupted while banning player", e);
         }
-        return false;
+        return null;
     }
 
-    public boolean stopServer(String worldName){
-        MinecraftRconService minecraftRconService = rconServiceMap.get(worldName);
-        if (minecraftRconService == null) {
-            minecraftRconService = Objects.requireNonNull(addRconService(worldName));
+    public String opPlayer(String worldName, String playerName){
+        MinecraftRconService minecraftRconService =createOrGetRconService(worldName);
+        try {
+            final MinecraftRcon minecraftRcon = minecraftRconService.minecraftRcon().orElseThrow(IllegalStateException::new);
+            Future<RconResponse> response = minecraftRcon.sendAsync(new OpCommand(Target.player(playerName)));
+            return response.get().getResponseString();
+        } catch (RuntimeException e) {
+            log.error("Unexpected error during RCON operation", e);
+        } catch (ExecutionException e) {
+            log.error("Error while banning player", e);
+        } catch (InterruptedException e) {
+            log.error("Interrupted while banning player", e);
         }
+        return null;
+    }
+
+    public String deOpPlayer(String worldName, String playerName){
+        MinecraftRconService minecraftRconService =createOrGetRconService(worldName);
+        try {
+            final MinecraftRcon minecraftRcon = minecraftRconService.minecraftRcon().orElseThrow(IllegalStateException::new);
+            Future<RconResponse> response = minecraftRcon.sendAsync(new DeOpCommand(Target.player(playerName)));
+            return response.get().getResponseString();
+        } catch (RuntimeException e) {
+            log.error("Unexpected error during RCON operation", e);
+        } catch (ExecutionException e) {
+            log.error("Error while removing op player", e);
+        } catch (InterruptedException e) {
+            log.error("Interrupted while removing op player", e);
+        }
+        return null;
+    }
+
+
+    public boolean stopServer(String worldName){
+        MinecraftRconService minecraftRconService =createOrGetRconService(worldName);
         try {
             final MinecraftRcon minecraftRcon = minecraftRconService.minecraftRcon().orElseThrow(IllegalStateException::new);
             Future<RconResponse> response = minecraftRcon.sendAsync(new StopCommand());

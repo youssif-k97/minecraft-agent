@@ -213,7 +213,7 @@ public class MinecraftServerController {
 
     @PostMapping("/worlds/{worldId}/connectRcon")
     public ResponseEntity connectRcon(@PathVariable String worldId) {
-        rconClientService.addRconService(worldId);
+        rconClientService.createOrGetRconService(worldId);
         return ResponseEntity.ok().body("Command sent successfully");
     }
 
@@ -234,10 +234,11 @@ public class MinecraftServerController {
     }
 
     @PostMapping("/worlds/{worldId}/banPlayer")
-    public ResponseEntity banPlayer(@PathVariable String worldId, @RequestBody BanKickPlayerDto playerDto) {
+    public ResponseEntity<String> banPlayer(@PathVariable String worldId, @RequestBody BanKickPlayerDto playerDto) {
+        log.info("Entering banPlayer() with worldId: {} and playerDto: {}", worldId, playerDto);
         try {
-            playerService.banPlayer(worldId, playerDto );
-            return ResponseEntity.ok().build();
+            String response = playerService.banPlayer(worldId, playerDto );
+            return ResponseEntity.ok().body(response);
         } catch (Exception e) {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body("Failed to ban players: " + e.getMessage());
@@ -245,13 +246,50 @@ public class MinecraftServerController {
     }
 
     @PostMapping("/worlds/{worldId}/kickPlayer")
-    public ResponseEntity kickPlayer(@PathVariable String worldId, @RequestBody BanKickPlayerDto playerDto) {
+    public ResponseEntity<String> kickPlayer(@PathVariable String worldId, @RequestBody BanKickPlayerDto playerDto) {
+        log.info("Entering kickPlayer() with worldId: {} and playerDto: {}", worldId, playerDto);
         try {
-            playerService.kickPlayer(worldId, playerDto);
-            return ResponseEntity.ok().build();
+            String response = playerService.kickPlayer(worldId, playerDto);
+            return ResponseEntity.ok().body(response);
         } catch (Exception e) {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body("Failed to kick players: " + e.getMessage());
+        }
+    }
+
+    @PostMapping("/worlds/{worldId}/opPlayer")
+    public ResponseEntity<String> opPlayer(@PathVariable String worldId, @RequestBody PlayerOpDto playerDto) {
+        log.info("Entering opPlayer() with worldId: {} and playerDto: {}", worldId, playerDto);
+        try {
+            String response = playerService.opPlayer(worldId, playerDto);
+            return ResponseEntity.ok().body(response);
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body("Failed to op players: " + e.getMessage());
+        }
+    }
+
+    @PostMapping("/worlds/{worldId}/removeOpPlayer")
+    public ResponseEntity<String> removeOpPlayer(@PathVariable String worldId, @RequestBody PlayerOpDto playerDto) {
+        log.info("Entering removeOpPlayer() with worldId: {} and playerDto: {}", worldId, playerDto);
+        try {
+            String response = playerService.removeOpPlayer(worldId, playerDto);
+            return ResponseEntity.ok().body(response);
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body("Failed to remove op players: " + e.getMessage());
+        }
+    }
+
+    @PostMapping("/worlds/{worldId}/whitelist")
+    public ResponseEntity<String> whitelistPlayer(@PathVariable String worldId, @RequestBody PlayerDto playerDto) {
+        log.info("Entering whitelistPlayer() with worldId: {} and playerDto: {}", worldId, playerDto);
+        try {
+            playerService.whitelistPlayer(worldId, playerDto);
+            return ResponseEntity.ok().body("Player whitelisted successfully");
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body("Failed to whitelist players: " + e.getMessage());
         }
     }
 
@@ -259,9 +297,19 @@ public class MinecraftServerController {
     public ResponseEntity<String> sendRawRconCommand(@PathVariable String worldId, @RequestBody Map<String, String> command) {
         log.info("Entering sendRawRconCommand() with worldId: {} and command: {}", worldId, command);
         try {
-            String response = rconClientService.sendRawRconCommand(worldId, command.get("command"));
-            log.info("Exiting sendRawRconCommand() with response: {}", response);
-            return ResponseEntity.ok().body(response);
+            String rawCommand = command.get("command");
+            if(rawCommand.startsWith("ban") || rawCommand.startsWith("kick") 
+            || rawCommand.startsWith("op") || rawCommand.startsWith("deop")
+            || rawCommand.startsWith("pardon")) {
+                log.info("Entering handlePlayerRawCommand() with worldId: {} and command: {}", worldId, rawCommand);
+                String response = playerService.handlePlayerRawCommand(worldId, rawCommand);
+                log.info("Exiting handlePlayerRawCommand() with response: {}", response);
+                return ResponseEntity.ok().body(response);
+            } else {
+                String response = rconClientService.sendRawRconCommand(worldId, rawCommand);
+                log.info("Exiting sendRawRconCommand() with response: {}", response);
+                return ResponseEntity.ok().body(response);
+            }
         } catch (Exception e) {
             log.error("Error in sendRawRconCommand(): {}", e.getMessage(), e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
