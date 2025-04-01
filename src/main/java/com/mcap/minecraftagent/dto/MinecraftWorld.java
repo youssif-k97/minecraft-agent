@@ -5,7 +5,6 @@ import lombok.Data;
 
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 @Data
 public class MinecraftWorld{
@@ -13,8 +12,6 @@ public class MinecraftWorld{
     private String name;
     @JsonProperty("isActive")
     private boolean isActive;
-    private List<String> players;
-    private Map<String, String> properties;
     private int port;
     private Ram ram;
 

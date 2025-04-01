@@ -1,7 +1,10 @@
 package com.mcap.minecraftagent.service;
 
+import com.mcap.minecraftagent.dto.ServerPropertiesDto;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.cache.CacheManager;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
@@ -12,6 +15,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Properties;
 
 @Slf4j
@@ -41,7 +45,13 @@ public class ServerPropertiesService {
         return properties;
     }
 
-    public Map<String, String> getAllProperties(String worldId) {
+    @Cacheable(value = "propertiesInfo", key = "#worldName")
+    public ServerPropertiesDto getProperties(String worldName) {
+        log.info("Fetching properties for world: {}", worldName);
+        return fetchProperties(worldName);
+    }
+
+    public ServerPropertiesDto fetchProperties(String worldId) {
         log.info("Retrieving all properties for worldId: {}", worldId);
         Properties properties = loadProperties(worldId);
         Map<String, String> propsMap = new HashMap<>();
@@ -49,7 +59,7 @@ public class ServerPropertiesService {
             propsMap.put(key, properties.getProperty(key));
         }
         log.info("Successfully retrieved {} properties for worldId: {}", propsMap.size(), worldId);
-        return propsMap;
+        return new ServerPropertiesDto(propsMap);
     }
 
     public void setProperty(String worldId, Map<String, String> properties) {
@@ -59,22 +69,16 @@ public class ServerPropertiesService {
         for (Map.Entry<String, String> entry : properties.entrySet()) {
             log.info("Setting property: {} = {}", entry.getKey(), entry.getValue());
             if (entry.getKey().equals("server-port")) {
-                try {
-                    log.info("Updating server port for worldId: {}", worldId);
-                    this.configService.updateServerPort(worldId, Integer.parseInt(entry.getValue()));
-                } catch (IOException e) {
-                    log.error("Failed to update server port", e);
-                    throw new RuntimeException(e);
-                }
+                log.info("Updating server port for worldId: {}", worldId);
+                this.configService.updateServerPort(worldId, Integer.parseInt(entry.getValue()));
+                // update rcon port as well when port is updated
+                propFile.setProperty("rcon.port", String.valueOf(Integer.parseInt(entry.getValue())+10));
             }
             propFile.setProperty(entry.getKey(), entry.getValue());
         }
         log.info("Finished updating properties for worldId: {}", worldId);
         saveProperties(propertiesPath, propFile);
-        var cache = this.cacheManager.getCache("minecraftWorlds");
-        if (cache != null) {
-            cache.clear();
-        }
+        evictPropertiesCache(worldId);
     }
 
     private void saveProperties(String propertiesPath, Properties properties) {
@@ -87,5 +91,10 @@ public class ServerPropertiesService {
             log.error("Failed to save properties file: {}", propertiesPath, e);
             throw new RuntimeException("Failed to save properties file: " + propertiesPath, e);
         }
+    }
+
+    public void evictPropertiesCache(String worldName) {
+        log.info("Evicting properties cache for world: {}", worldName);
+        Objects.requireNonNull(cacheManager.getCache("propertiesInfo")).evict(worldName);
     }
 }

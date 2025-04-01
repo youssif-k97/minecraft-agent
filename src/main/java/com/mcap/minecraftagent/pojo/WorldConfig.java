@@ -1,14 +1,19 @@
 package com.mcap.minecraftagent.pojo;
 
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import jakarta.persistence.*;
 import lombok.Data;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
 
-
+@Entity
 @Data
-@JsonIgnoreProperties(ignoreUnknown = true)
 public class WorldConfig {
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
     // Basic settings
     private String worldName;
     private String serverVersion;
@@ -23,4 +28,17 @@ public class WorldConfig {
     private LocalDateTime createdAt;
     private LocalDateTime lastStarted;
     private String lastBackup;
+    private String rconPassword;
+
+    // Players
+    @OneToMany(mappedBy = "world", cascade = CascadeType.ALL, orphanRemoval = true)
+    private List<WorldPlayer> worldPlayers = new ArrayList<>();
+
+    public List<Player> getPlayers() {
+        List<Player> players = new ArrayList<>();
+        for (WorldPlayer worldPlayer : worldPlayers) {
+            players.add(worldPlayer.getPlayer());
+        }
+        return players;
+    }
 }

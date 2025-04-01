@@ -1,15 +1,10 @@
 package com.mcap.minecraftagent.service;
 
-import com.mcap.minecraftagent.config.MinecraftLogHandler;
 import com.mcap.minecraftagent.dto.MinecraftWorld;
+import com.mcap.minecraftagent.dto.MinecraftWorldsResponse;
 import com.mcap.minecraftagent.pojo.WorldConfig;
-import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.cache.CacheManager;
 import org.springframework.stereotype.Service;
-import oshi.SystemInfo;
-import oshi.software.os.OSProcess;
-import oshi.software.os.OperatingSystem;
 
 import java.io.*;
 import java.net.HttpURLConnection;
@@ -20,10 +15,8 @@ import java.nio.file.Paths;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
 
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
@@ -33,99 +26,54 @@ public class WorldManagementService {
     private final ConfigurationService configService;
     private final MinecraftDownloadService downloadService;
     private final ServerProcessManager processManager;
-    private final MinecraftLogHandler logHandler;
     private final String baseDir;
-    private Map<String, Integer> runningServers;
     private final int maxRam;
     private final ServerPropertiesService serverPropertiesService;
-    private final CacheManager cacheManager;
 
     public WorldManagementService(
-            ConfigurationService configService,
-            MinecraftDownloadService downloadService,
-            ServerProcessManager processManager,
-            MinecraftLogHandler logHandler,
-            ServerPropertiesService serverPropertiesService,
-            CacheManager cacheManager) {
+            ConfigurationService configService, MinecraftDownloadService downloadService,
+            ServerProcessManager processManager, ServerPropertiesService serverPropertiesService) {
         this.configService = configService;
         this.downloadService = downloadService;
         this.processManager = processManager;
-        this.logHandler = logHandler;
-        this.cacheManager = cacheManager;
         this.baseDir = System.getProperty("user.home") + System.getProperty("file.separator") + "minecraft-servers" + System.getProperty("file.separator");
         new File(baseDir).mkdirs();
         this.maxRam = 4096;
         this.serverPropertiesService = serverPropertiesService;
     }
 
-    @PostConstruct
-    public void discoverRunningServers() {
-        SystemInfo si = new SystemInfo();
-        OperatingSystem os = si.getOperatingSystem();
-        this.runningServers = new ConcurrentHashMap<>();
-        log.info("Starting Minecraft server process discovery...");
-        os.getProcesses().stream()
-                .filter(this::isJavaProcess)
-                .forEach(this::processMinecraftServer);
-        syncServerStatus();
+    public MinecraftWorldsResponse getAllWorlds() {
+        log.info("Fetching all Minecraft worlds.");
+        List<MinecraftWorld> worlds = configService.getAllConfigs().stream()
+                .map(this::mapToWorldResponse)
+                .collect(Collectors.toList());
+        log.info("Fetched {} worlds.", worlds.size());
+        return new MinecraftWorldsResponse(worlds);
     }
 
-
-    private void syncServerStatus() {
-        List<WorldConfig> allConfigs = configService.getAllConfigs();
-        allConfigs.forEach(config -> {
-            config.setRunning(runningServers.containsKey(config.getWorldName()));
-            try {
-                configService.saveConfig(config);
-            } catch (IOException e) {
-                log.error("Failed to sync server status", e);
-            }
-        });
-    }
-
-    private boolean isJavaProcess(OSProcess process) {
-        return process.getName().contains("java");
-    }
-
-    private void processMinecraftServer(OSProcess process) {
-        try {
-            List<String> args = process.getArguments();
-            if (isMinecraftServer(args)) {
-                log.info("Found potential Minecraft server process: PID {}", process.getProcessID());
-                extractWorldName(args).ifPresentOrElse(worldName -> handleDiscoveredServer(process, worldName),
-                        () -> log.warn("The Minecraft server with pid {} was not started by agent", process.getProcessID()));
-            }
-        } catch (Exception e) {
-            log.error("Error processing process {}: {}", process.getProcessID(), e.getMessage());
+    public MinecraftWorld getWorld(String worldName) {
+        log.info("Fetching world details for: {}", worldName);
+        WorldConfig config = configService.getConfig(worldName);
+        if (config == null) {
+            return null;
         }
+        return mapToWorldResponse(config);
     }
 
-    private boolean isMinecraftServer(List<String> args) {
-        return args.contains("server.jar") &&
-                args.contains("nogui");
-    }
+    private MinecraftWorld mapToWorldResponse(WorldConfig config) {
+        MinecraftWorld details = new MinecraftWorld();
+        details.setId(config.getWorldName());  // Using worldName as ID
+        details.setName(config.getWorldName());
+        details.setActive(config.isRunning());
+        details.setPort(config.getPort());
 
-    private Optional<String> extractWorldName(List<String> args) {
-        return args.stream()
-                .filter(arg -> arg.startsWith("worldref="))
-                .findFirst()
-                .map(worldName -> worldName.substring("worldref=".length()));
-    }
+        MinecraftWorld.Ram ram = new MinecraftWorld.Ram();
+        ram.setMin(config.getMinMemory());
+        ram.setMax(config.getMaxMemory());
 
-    private void handleDiscoveredServer(OSProcess process, String worldName) {
-        log.info("Discovered Minecraft server: {} (PID: {})", worldName, process.getProcessID());
-        WorldConfig worldConfig = configService.getConfig(worldName);
-        if (worldConfig == null) {
-            throw new IllegalStateException("World configuration not found: " + worldName);
-        }
-        worldConfig.setRunning(true);
-        worldConfig.setLastStarted(LocalDateTime.now());
-        try {
-            configService.saveConfig(worldConfig);
-        } catch (IOException e) {
-            throw new RuntimeException(e);
-        }
-        runningServers.put(worldName, process.getProcessID());
+        details.setRam(ram);
+
+        return details;
     }
 
     public void createWorld(WorldConfig config) throws IOException {
@@ -143,89 +91,37 @@ public class WorldManagementService {
         log.info("Downloading server jar for world: {}", config.getWorldName());
         downloadService.downloadServerJar(config.getServerVersion(), worldDir);
         log.info("Saving configuration for world: {}", config.getWorldName());
+        String rconPassword = generateRconPassword();
+        config.setRconPassword(rconPassword);
         configService.saveConfig(config);
         Files.write(Paths.get(worldDir, "eula.txt"), "eula=true".getBytes());
-        String portProp = "server-port=" + config.getPort();
-        Files.write(Paths.get(worldDir, "server.properties"), portProp.getBytes());
+        
+        StringBuilder propertiesContent = new StringBuilder();
+        propertiesContent.append("server-port=").append(config.getPort()).append("\n");
+        propertiesContent.append("enable-rcon=true\n");
+        propertiesContent.append("rcon.port=").append(config.getPort() + 10).append("\n"); 
+        propertiesContent.append("rcon.password=").append(config.getRconPassword()).append("\n");
+        
+        Files.write(Paths.get(worldDir, "server.properties"), propertiesContent.toString().getBytes());
         log.info("World {} created successfully", config.getWorldName());
-        var cache = this.cacheManager.getCache("minecraftWorlds");
-        if (cache != null) {
-            cache.clear();
+        startServer(config.getWorldName());
+        this.serverPropertiesService.evictPropertiesCache(config.getWorldName());
+    }
+
+    private String generateRconPassword() {
+        String chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*";
+        StringBuilder password = new StringBuilder();
+        Random random = new Random();
+        for (int i = 0; i < 12; i++) {
+            password.append(chars.charAt(random.nextInt(chars.length())));
         }
+        return password.toString();
     }
 
     public void startServer(String worldName) throws IOException {
         log.info("Starting server for world: {}", worldName);
         WorldConfig config = configService.getConfig(worldName);
-        if (config == null) {
-            log.error("Start server failed: World {} not found", worldName);
-            throw new IllegalStateException("World not found");
-        }
-        if (runningServers.containsKey(worldName)) {
-            log.warn("Start server aborted: World {} is already running", worldName);
-            throw new IllegalStateException("Server already running");
-        }
-    
-        String worldDir = baseDir + worldName;
-        ProcessBuilder pb = new ProcessBuilder(
-                "java",
-                "-Xmx" + config.getMaxMemory() + "M",
-                "-Xms" + config.getMinMemory() + "M",
-                "-jar",
-                "server.jar",
-                "nogui",
-                "worldref=" + worldName
-        )
-                .directory(new File(worldDir))
-                .redirectErrorStream(true);
-        Process process = pb.start();
-        processManager.registerProcess(worldName, process);
-        log.info("Server process registered for world: {}", worldName);
-        runningServers.put(worldName, (int) process.pid());
-        configService.updateServerStatus(worldName, true);
-        log.info("Server for world {} started successfully with PID {}", worldName, process.pid());
-
-        CountDownLatch serverStartedLatch = new CountDownLatch(1);
-        Thread logThread = new Thread(() -> {
-            try {
-                startLogCapture(process, worldName, serverStartedLatch);
-            } catch (Exception e) {
-                log.error("Error in log capture thread for world {}", worldName, e);
-            } finally {
-                try {
-                    config.setRunning(false);
-                    configService.saveConfig(config);
-                } catch (IOException ex) {
-                    log.error("Error updating config after server stop for world {}", worldName, ex);
-                }
-            }
-        }, "LogCapture-" + worldName);
-        logThread.setDaemon(true);
-        logThread.start();
-
-        verifyServerStart(process, worldName, serverStartedLatch);
-        var cache = this.cacheManager.getCache("minecraftWorlds");
-        if (cache != null) {
-            cache.clear();
-        }
-    }
-
-    private void verifyServerStart(Process process, String worldName, CountDownLatch serverStartedLatch) throws IOException {
-
-        long timeout = 120000; // 2 minutes timeout
-        boolean serverStarted = false;
-        try {
-            serverStarted = serverStartedLatch.await(timeout, TimeUnit.MILLISECONDS);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IOException("Server startup verification was interrupted", e);
-        }
-        if (!process.isAlive() || !serverStarted) {
-            processManager.removeProcess(worldName);
-            process.destroy();
-            log.error("Server startup verification timed out for world {}", worldName);
-            throw new RuntimeException("Server failed to start");
-        }
+        processManager.startServer(worldName, config);
     }
 
     public void stopServer(String worldName) throws IOException {
@@ -234,38 +130,12 @@ public class WorldManagementService {
         if (!processManager.stopServer(worldName)) {
             throw new IOException("Failed to stop server: " + worldName);
         }
-        runningServers.remove(worldName);
-        configService.updateServerStatus(worldName, false);
-        var cache = this.cacheManager.getCache("minecraftWorlds");
-        if (cache != null) {
-            cache.clear();
-        }
     }
 
     public void restartServer(String worldName) throws IOException, InterruptedException {
         stopServer(worldName);
         Thread.sleep(5000); // Wait for server to fully stop
         startServer(worldName);
-    }
-
-    private void startLogCapture(Process process, String worldName, CountDownLatch serverStartedLatch) {
-        new BufferedReader(new InputStreamReader(process.getInputStream())).lines()
-                .forEach(line -> {
-                    log.info("[{}] {}", worldName, line);
-                    logHandler.broadcastLog(worldName, line);
-                    if (line.contains("Done") || line.contains("For help, type \"help\"")) {
-                        serverStartedLatch.countDown(); // Signal server is ready
-                    }
-//                    try {
-//                        Files.write(
-//                                Paths.get(baseDir, worldName, "logs", "latest.log"),
-//                                (line + System.lineSeparator()).getBytes(),
-//                                StandardOpenOption.CREATE, StandardOpenOption.APPEND
-//                        );
-//                    } catch (IOException e) {
-//                        log.error("Failed to write log", e);
-//                    }
-                });
     }
 
     public String createBackup(String worldName) throws IOException {
@@ -301,7 +171,7 @@ public class WorldManagementService {
         return backupFile;
     }
 
-    public boolean uploadWorldForDownload(String worldName, String uploadUrl) throws IOException {
+    public void uploadWorldForDownload(String worldName, String uploadUrl) throws IOException {
         log.info(("Uploading world for world: {}"), worldName);
         String worldDir = baseDir + worldName;
 
@@ -326,6 +196,7 @@ public class WorldManagementService {
                     });
         }
 
+        Path tempZipPath = Path.of(tempZipFile);
         try {
             URL url = new URL(uploadUrl);
             HttpURLConnection connection = (HttpURLConnection) url.openConnection();
@@ -334,11 +205,11 @@ public class WorldManagementService {
             connection.setRequestProperty("Content-Type", "application/zip");
 
             // Get file size for Content-Length header
-            long fileSize = Files.size(Path.of(tempZipFile));
+            long fileSize = Files.size(tempZipPath);
             connection.setRequestProperty("Content-Length", String.valueOf(fileSize));
 
             // Upload the file
-            try (InputStream input = Files.newInputStream(Path.of(tempZipFile));
+            try (InputStream input = Files.newInputStream(tempZipPath);
                  OutputStream output = connection.getOutputStream()) {
                 byte[] buffer = new byte[8192];
                 int bytesRead;
@@ -352,17 +223,15 @@ public class WorldManagementService {
             boolean success = responseCode >= 200 && responseCode < 300;
 
             connection.disconnect();
-            return success;
 
         } finally {
-            // Clean up temporary zip file
-            Files.deleteIfExists(Path.of(tempZipFile));
+            Files.deleteIfExists(tempZipPath);
         }
     }
 
     public void deleteWorld(String worldName) throws IOException {
         String worldDir = baseDir + worldName;
-        if (runningServers.containsKey(worldName)) {
+        if (processManager.getRunningServers().containsKey(worldName)) {
             stopServer(worldName);
         }
         Files.walk(Paths.get(worldDir))
