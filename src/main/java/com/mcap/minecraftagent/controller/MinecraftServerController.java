@@ -103,6 +103,18 @@ public class MinecraftServerController {
         return ResponseEntity.ok().body("Server restarted successfully");
     }
 
+    @PostMapping("/worlds/{worldId}/update")
+    public ResponseEntity updateServerVersion(@RequestBody WorldConfig worldConfig) {
+        try {
+            minecraftService.updateServerVersion(worldConfig);
+        } catch (IOException e) {
+            log.error("Error in updateServerVersion(): {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body("Failed to update server version: " + e.getMessage());
+        }
+        return ResponseEntity.ok().body("Server version updated successfully");
+    }
+
     @DeleteMapping("/worlds/{worldId}/delete")
     public ResponseEntity deleteWorld(@PathVariable String worldId) {
         log.info("Entering deleteWorld() with worldId: {}", worldId);

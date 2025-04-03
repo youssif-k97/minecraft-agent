@@ -10,6 +10,7 @@ import java.util.Map;
 public class MinecraftWorld{
     private String id;
     private String name;
+    private String serverVersion;
     @JsonProperty("isActive")
     private boolean isActive;
     private int port;

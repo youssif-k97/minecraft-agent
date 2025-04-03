@@ -66,6 +66,7 @@ public class WorldManagementService {
         details.setName(config.getWorldName());
         details.setActive(config.isRunning());
         details.setPort(config.getPort());
+        details.setServerVersion(config.getServerVersion());
 
         MinecraftWorld.Ram ram = new MinecraftWorld.Ram();
         ram.setMin(config.getMinMemory());
@@ -116,6 +117,24 @@ public class WorldManagementService {
             password.append(chars.charAt(random.nextInt(chars.length())));
         }
         return password.toString();
+    }
+
+    public void updateServerVersion(WorldConfig worldConfig) throws IOException {
+        String worldDir = baseDir + worldConfig.getWorldName();
+        log.info("Updating server version for world: {} at directory: {}", worldConfig.getWorldName(), worldDir);
+        if (!new File(worldDir).exists()) {
+            log.error("World update failed: {} does not exist", worldConfig.getWorldName());
+            throw new IllegalStateException("World does not exist");
+        }
+        boolean isRunning = processManager.getRunningServers().containsKey(worldConfig.getWorldName());
+        if (isRunning) {
+            log.info("Stopping server");
+            stopServer(worldConfig.getWorldName());
+        }
+        log.info("Downloading new server version");
+        downloadService.downloadServerJar(worldConfig.getServerVersion(), worldDir);
+        log.info("Server version updated for world: {}", worldConfig.getWorldName());
+        configService.updateServerVersion(worldConfig.getWorldName(), worldConfig.getServerVersion());
     }
 
     public void startServer(String worldName) throws IOException {

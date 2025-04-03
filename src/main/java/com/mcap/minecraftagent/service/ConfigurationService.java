@@ -95,6 +95,18 @@ public class ConfigurationService {
         }
     }
 
+    public void updateServerVersion(String worldName, String serverVersion) {
+        log.info("Updating server version for world: {}, serverVersion: {}", worldName, serverVersion);
+        WorldConfig config = getConfig(worldName);
+        if (config != null) {
+            config.setServerVersion(serverVersion);
+            worldConfigRepository.save(config);
+            log.info("Server version updated for world: {}, serverVersion: {}", worldName, serverVersion);
+        } else {
+            log.warn("No configuration found for world: {}", worldName);
+        }
+    }
+
     public void deleteConfig(String worldName) {
         log.info("Deleting configuration for world: {}", worldName);
         worldConfigRepository.deleteByWorldName(worldName);
